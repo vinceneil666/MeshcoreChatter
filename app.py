@@ -524,6 +524,20 @@ class ChatScreen(Screen):
 
         try:
             msgs = await self.corescope.channel_messages(t.label, limit=5)
+
+            prefixes: list[str] = []
+            seen: set[str] = set()
+            for m in msgs:
+                try:
+                    path = await self.corescope.packet_path(m["packetId"])
+                except Exception:
+                    continue  # a single expired/missing packet shouldn't blank the whole panel
+                for p in path:
+                    if p not in seen:
+                        seen.add(p)
+                        prefixes.append(p)
+
+            names = await self.corescope.resolve_hops(prefixes) if prefixes else {}
         except Exception as exc:  # noqa: BLE001 - network/server errors shouldn't crash the UI
             panel.update(f"[bold red]CoreScope error:[/] {exc}")
             return
@@ -532,14 +546,15 @@ class ChatScreen(Screen):
             panel.update(f"[dim]CoreScope ({self.corescope.base_url}): no data yet for '{t.label}'[/]")
             return
 
-        lines = [f"[bold]CoreScope live - {t.label}[/]  ({self.corescope.base_url})"]
-        for m in reversed(msgs):
-            sender = m.get("sender", "?")
-            hops = m.get("hops", "?")
-            snr = m.get("snr", "?")
-            observers = ", ".join(m.get("observers") or []) or "-"
-            text = (m.get("text") or "")[:40]
-            lines.append(f"  [b]{sender}[/]: {hops} hop(s), SNR {snr}dB, seen by: {observers}  \"{text}\"")
+        lines = [f"[bold]CoreScope - repeaters relaying {t.label}[/]  ({self.corescope.base_url})"]
+        if not prefixes:
+            lines.append("  (no repeaters in the last few messages - all heard direct)")
+        else:
+            shown, extra = prefixes[:6], max(0, len(prefixes) - 6)
+            for p in shown:
+                lines.append(f"  - {names.get(p, p)}")
+            if extra:
+                lines.append(f"  ...and {extra} more")
         panel.update("\n".join(lines))
 
     async def set_corescope(self, arg: str) -> None:

@@ -13,7 +13,7 @@ Connects to a MeshCore companion device (over USB serial or BLE), and gives you 
 - **Persistent history** - the last 50 messages of every chat are remembered across restarts, keyed to the connected node's own public key (so it follows that physical device regardless of which `/dev/ttyACMx` it enumerates as, or whether you connect over USB or BLE).
 - **Slash commands**: `/join`, `/msg`, `/newchannel`, `/delchannel`, `/corescope`, `/reply`, `/contacts`, `/channels`, `/clear`, `/quit`, `/help`.
 - **Keyboard-first**: `ctrl+up` / `ctrl+down` to switch chats, `ctrl+r` to reply, `esc` to cancel a reply, `ctrl+l` to clear the pane, `ctrl+q` to quit, `f1` for help.
-- **Live CoreScope analytics panel** - at startup, pick a [CoreScope](https://github.com/Kpa-clawbot/CoreScope) analytics server (from a predefined list in `corescope_servers.txt`, or type your own URL, or skip). A panel at the bottom of the chat screen shows recent hop counts, SNR, and observing nodes for the active channel - a basic view of the path packets took to reach you.
+- **Live CoreScope analytics panel** - at startup, pick a [CoreScope](https://github.com/Kpa-clawbot/CoreScope) analytics server (from a predefined list in `corescope_servers.txt`, or type your own URL, or skip). A panel at the bottom of the chat screen shows a simple, deduplicated list of the actual repeaters that relayed the last few messages in the active channel (resolved from the packet's real hop path, not just who observed it).
 - **Reply to a message** - `ctrl+r` (or `/reply`) opens a picker of recent messages in the current chat; click one, or arrow-key + Enter. Your next message goes out with a compact quote of the original prepended, and a banner shows what you're replying to until you send or cancel (`Esc`).
 
 ## Requirements
@@ -86,7 +86,7 @@ Message history lives in `~/.meshcore-chat/history/<node-public-key>.json`, one 
 
 ## CoreScope live analytics
 
-[CoreScope](https://github.com/Kpa-clawbot/CoreScope) is a separate, community-run MeshCore packet analyzer with a public REST API (no auth required by default). This app queries `GET /api/channels/{name}/messages` for the currently active channel and shows, per recent message: sender, hop count, SNR, and which observer nodes on that CoreScope instance saw the packet - a basic proxy for "what path did this take."
+[CoreScope](https://github.com/Kpa-clawbot/CoreScope) is a separate, community-run MeshCore packet analyzer with a public REST API (no auth required by default). For the last few messages in the active channel, this app fetches each packet's real recorded hop path (`GET /api/packets/{id}`) and resolves those hash prefixes to repeater names (`GET /api/resolve-hops`), then shows a simple deduplicated list of the repeaters actually involved - not just who happened to observe the packet.
 
 Predefined servers are read from `corescope_servers.txt` (one `Name = https://host` per line, `#` for comments) and offered in the startup picker alongside a free-text URL field and a skip option. Change or disable it later at any time with `/corescope <url>` / `/corescope off`. It only covers channels (group broadcasts) - direct messages are point-to-point encrypted and aren't visible to a passive analyzer, so the panel shows a placeholder for those.
 

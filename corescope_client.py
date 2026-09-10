@@ -35,6 +35,22 @@ class CoreScopeClient:
         r.raise_for_status()
         return r.json()
 
+    async def packet_path(self, packet_id: int) -> list[str]:
+        """The ordered list of hop hash-prefixes (e.g. "5CE881") a packet's header
+        recorded - i.e. the repeaters it was relayed through, in order."""
+        r = await self._http.get(f"/api/packets/{packet_id}")
+        r.raise_for_status()
+        return r.json().get("path", [])
+
+    async def resolve_hops(self, hop_prefixes: list[str]) -> dict[str, str]:
+        """Resolve hop hash-prefixes to repeater names. Returns {prefix: name}."""
+        if not hop_prefixes:
+            return {}
+        r = await self._http.get("/api/resolve-hops", params={"hops": ",".join(hop_prefixes)})
+        r.raise_for_status()
+        resolved = r.json().get("resolved", {})
+        return {prefix: info.get("name", prefix) for prefix, info in resolved.items()}
+
     async def stats(self) -> dict:
         r = await self._http.get("/api/stats")
         r.raise_for_status()
