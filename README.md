@@ -1,7 +1,5 @@
 # MeshcoreChatter
 
-> **This is the `v2-corescope-analytics` branch** - adds live CoreScope analytics on top of the stable `master` branch. Under active testing; not yet merged.
-
 An IRC-style terminal chat client for a [MeshCore](https://github.com/meshcore-dev/MeshCore) companion radio node, built with [Textual](https://textual.textualize.io/).
 
 Connects to a MeshCore companion device (over USB serial or BLE), and gives you a proper terminal UI on top of it: a channel/contact sidebar, a scrolling message pane, unread badges, and slash commands - instead of driving the mesh one line at a time.
