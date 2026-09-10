@@ -27,6 +27,25 @@ from meshcore import EventType
 import history_store
 from corescope_client import CoreScopeClient
 
+# Textual owns the whole terminal (alt-screen); any stray logging to
+# stdout/stderr corrupts the display underneath it. The `meshcore` package
+# calls logging.basicConfig(level=INFO) itself on import (installing a
+# stderr StreamHandler on the root logger), and httpx logs every request at
+# INFO - so without this, both leak raw "INFO:..." lines into the UI.
+# force=True replaces that handler regardless of import order.
+import logging
+
+_LOG_DIR = Path.home() / ".meshcore-chat"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    filename=str(_LOG_DIR / "app.log"),
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    force=True,
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 SERVERS_FILE = Path(__file__).parent / "corescope_servers.txt"
 
 
