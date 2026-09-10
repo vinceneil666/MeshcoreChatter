@@ -25,7 +25,7 @@ Connects to a MeshCore companion device (over USB serial or BLE), and gives you 
 ## Install
 
 ```bash
-git clone https://github.com/<you>/MeshcoreChatter.git
+git clone https://github.com/vinceneil666/MeshcoreChatter.git
 cd MeshcoreChatter
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
