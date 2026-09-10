@@ -1,0 +1,5 @@
+# Predefined CoreScope servers offered in the picker at startup.
+# One per line: "Display Name = https://host" (or just a bare URL).
+# Lines starting with # are comments.
+
+My CoreScope = https://corescope.eth0.no

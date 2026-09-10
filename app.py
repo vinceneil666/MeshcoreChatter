@@ -1,14 +1,20 @@
 """meshcore-chat - an IRC-style terminal chat client for a MeshCore companion node.
 
+v2: adds a CoreScope (https://github.com/Kpa-clawbot/CoreScope) analytics
+server picker at startup and a live "paths taken" / hop / SNR panel at the
+bottom of the chat screen for the active channel.
+
 Usage:
-    python app.py                  # shows a device picker (BLE + serial)
-    python app.py /dev/ttyACM0     # connect straight to a serial port, no picker
+    python app.py                                # device picker, then CoreScope server picker
+    python app.py /dev/ttyACM0                   # connect straight to a serial port, no pickers
+    python app.py /dev/ttyACM0 https://host       # ...with a CoreScope server preselected
 """
 from __future__ import annotations
 
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -19,6 +25,26 @@ from textual.widgets import Header, Footer, Input, Label, ListItem, ListView, Ri
 from mc_client import MeshCoreClient
 from meshcore import EventType
 import history_store
+from corescope_client import CoreScopeClient
+
+SERVERS_FILE = Path(__file__).parent / "corescope_servers.txt"
+
+
+def load_predefined_servers() -> list[tuple[str, str]]:
+    """Parse corescope_servers.txt: 'Name = url' or bare url per line, # comments."""
+    servers: list[tuple[str, str]] = []
+    if not SERVERS_FILE.exists():
+        return servers
+    for line in SERVERS_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            name, url = line.split("=", 1)
+            servers.append((name.strip(), url.strip()))
+        else:
+            servers.append((line, line))
+    return servers
 
 
 @dataclass
@@ -119,6 +145,72 @@ class DevicePickerScreen(Screen):
         self.app.exit()
 
 
+# --------------------------------------------------------- corescope picker
+
+class ServerPickerScreen(Screen):
+    """Pick a CoreScope analytics server: predefined list, a typed custom URL,
+    or skip (no live analytics panel)."""
+
+    CSS = """
+    ServerPickerScreen {
+        align: center middle;
+    }
+    #cs_picker_box {
+        width: 70%;
+        height: 70%;
+        border: heavy $accent;
+        padding: 1 2;
+    }
+    #cs_status {
+        height: 2;
+        color: $text-muted;
+    }
+    #server_list {
+        height: 1fr;
+        border: solid $accent;
+    }
+    #custom_url {
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [Binding("ctrl+q", "quit_app", "Quit")]
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Vertical(id="cs_picker_box"):
+            yield Static(
+                "Pick a CoreScope server for live analytics (optional). "
+                "↑/↓ + Enter to choose, or type a URL below and press Enter.",
+                id="cs_status",
+            )
+            yield ListView(id="server_list")
+            yield Input(placeholder="https://your-corescope-server  (or leave blank + Enter to skip)", id="custom_url")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        list_view = self.query_one("#server_list", ListView)
+        for name, url in load_predefined_servers():
+            item = ListItem(Label(f"{name}  ({url})"))
+            item.server_url = url
+            list_view.append(item)
+        skip_item = ListItem(Label("Skip - no live analytics"))
+        skip_item.server_url = None
+        list_view.append(skip_item)
+        list_view.index = 0
+        list_view.focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self.dismiss(getattr(event.item, "server_url", None))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        url = event.value.strip()
+        self.dismiss(url or None)
+
+    def action_quit_app(self) -> None:
+        self.app.exit()
+
+
 # ------------------------------------------------------------------ chat
 
 class ChatScreen(Screen):
@@ -153,6 +245,13 @@ class ChatScreen(Screen):
         height: 1fr;
         padding: 0 1;
     }
+    #corescope_panel {
+        height: 7;
+        background: $panel;
+        border-top: solid $accent;
+        padding: 0 1;
+        color: $text-muted;
+    }
     ListItem {
         padding: 0 1;
     }
@@ -173,7 +272,7 @@ class ChatScreen(Screen):
         Binding("ctrl+l", "clear_pane", "Clear"),
     ]
 
-    def __init__(self, connection: tuple[str, str]):
+    def __init__(self, connection: tuple[str, str], corescope_url: str | None = None):
         super().__init__()
         self.connection = connection  # (kind, ident) - kind is "serial" or "ble"
         self.client = MeshCoreClient()
@@ -183,6 +282,9 @@ class ChatScreen(Screen):
         self.list_item_by_key: dict[str, ListItem] = {}
         self.device_id: str | None = None
         self.saved_history: dict[str, list[str]] = {}
+        self.corescope: CoreScopeClient | None = None
+        if corescope_url:
+            self.corescope = CoreScopeClient(corescope_url)
 
     # ------------------------------------------------------------------ UI
 
@@ -194,12 +296,14 @@ class ChatScreen(Screen):
             with Vertical(id="main"):
                 yield Static("Connecting...", id="statusbar")
                 yield RichLog(id="chatlog", wrap=True, markup=True, highlight=False)
+                yield Static("", id="corescope_panel")
                 yield Input(placeholder="Message, or /help for commands", id="input")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#input", Input).focus()
         self.run_worker(self.startup(), exclusive=True)
+        self.set_interval(15, self.trigger_corescope_refresh)
 
     # ------------------------------------------------------------- connect
 
@@ -318,12 +422,65 @@ class ChatScreen(Screen):
         for k in self.target_order:
             self._refresh_list_item(k)
         self.update_status()
+        self.trigger_corescope_refresh()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         key = getattr(event.item, "target_key", None)
         if key:
             self.switch_target(key)
             self.query_one("#input", Input).focus()
+
+    # ---------------------------------------------------------- corescope
+
+    def trigger_corescope_refresh(self) -> None:
+        self.run_worker(self.refresh_corescope(), exclusive=True, group="corescope")
+
+    async def refresh_corescope(self) -> None:
+        panel = self.query_one("#corescope_panel", Static)
+
+        if self.corescope is None:
+            panel.update("[dim]CoreScope: not configured. Use /corescope <url> to set one.[/]")
+            return
+        if self.active_key is None:
+            panel.update("[dim]CoreScope: no chat selected[/]")
+            return
+
+        t = self.targets[self.active_key]
+        if t.kind != "chan":
+            panel.update("[dim]CoreScope: live analytics only cover channels, not direct messages[/]")
+            return
+
+        try:
+            msgs = await self.corescope.channel_messages(t.label, limit=5)
+        except Exception as exc:  # noqa: BLE001 - network/server errors shouldn't crash the UI
+            panel.update(f"[bold red]CoreScope error:[/] {exc}")
+            return
+
+        if not msgs:
+            panel.update(f"[dim]CoreScope ({self.corescope.base_url}): no data yet for '{t.label}'[/]")
+            return
+
+        lines = [f"[bold]CoreScope live - {t.label}[/]  ({self.corescope.base_url})"]
+        for m in reversed(msgs):
+            sender = m.get("sender", "?")
+            hops = m.get("hops", "?")
+            snr = m.get("snr", "?")
+            observers = ", ".join(m.get("observers") or []) or "-"
+            text = (m.get("text") or "")[:40]
+            lines.append(f"  [b]{sender}[/]: {hops} hop(s), SNR {snr}dB, seen by: {observers}  \"{text}\"")
+        panel.update("\n".join(lines))
+
+    async def set_corescope(self, arg: str) -> None:
+        log = self.query_one("#chatlog", RichLog)
+        if self.corescope is not None:
+            await self.corescope.aclose()
+            self.corescope = None
+        if not arg or arg.lower() == "off":
+            log.write("[dim]CoreScope live analytics disabled[/]")
+        else:
+            self.corescope = CoreScopeClient(arg)
+            log.write(f"[bold green]CoreScope set to {arg}[/]")
+        self.trigger_corescope_refresh()
 
     # ------------------------------------------------------------- receive
 
@@ -438,6 +595,8 @@ class ChatScreen(Screen):
             await self.create_channel(arg)
         elif cmd in ("delchannel", "rmchannel", "leave"):
             await self.delete_channel(arg)
+        elif cmd == "corescope":
+            await self.set_corescope(arg)
         elif cmd == "clear":
             self.action_clear_pane()
         else:
@@ -541,6 +700,7 @@ class ChatScreen(Screen):
             "  /msg <name>      open a direct message with a contact\n"
             "  /newchannel <name> [hex-secret]   create/configure a channel\n"
             "  /delchannel <name|#>   delete a channel\n"
+            "  /corescope <url|off>   set/disable the live analytics server\n"
             "  /contacts        refresh contact list\n"
             "  /channels        refresh channel list\n"
             "  /clear           clear the current pane\n"
@@ -579,14 +739,18 @@ class ChatScreen(Screen):
 
     async def on_unmount(self) -> None:
         await self.client.disconnect()
+        if self.corescope is not None:
+            await self.corescope.aclose()
 
 
 # ------------------------------------------------------------------- app
 
 class MeshChatApp(App):
-    def __init__(self, connection: tuple[str, str] | None = None):
+    def __init__(self, connection: tuple[str, str] | None = None, corescope_url: str | None = None):
         super().__init__()
-        self.initial_connection = connection  # set to skip the picker
+        self.initial_connection = connection  # set (e.g. via CLI arg) to skip the device picker
+        self.initial_corescope_url = corescope_url
+        self.interactive = connection is None  # CLI direct-connect mode skips both pickers
 
     async def on_mount(self) -> None:
         self.run_worker(self.startup_flow(), exclusive=True)
@@ -598,14 +762,22 @@ class MeshChatApp(App):
             if connection is None:
                 self.exit()
                 return
-        await self.push_screen(ChatScreen(connection))
+
+        corescope_url = self.initial_corescope_url
+        if self.interactive:
+            corescope_url = await self.push_screen_wait(ServerPickerScreen())
+
+        await self.push_screen(ChatScreen(connection, corescope_url))
 
 
 def main() -> None:
     connection = None
+    corescope_url = None
     if len(sys.argv) > 1:
         connection = ("serial", sys.argv[1])
-    MeshChatApp(connection).run()
+    if len(sys.argv) > 2:
+        corescope_url = sys.argv[2]
+    MeshChatApp(connection, corescope_url).run()
 
 
 if __name__ == "__main__":

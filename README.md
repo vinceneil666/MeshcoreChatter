@@ -1,5 +1,7 @@
 # MeshcoreChatter
 
+> **This is the `v2-corescope-analytics` branch** - adds live CoreScope analytics on top of the stable `master` branch. Under active testing; not yet merged.
+
 An IRC-style terminal chat client for a [MeshCore](https://github.com/meshcore-dev/MeshCore) companion radio node, built with [Textual](https://textual.textualize.io/).
 
 Connects to a MeshCore companion device (over USB serial or BLE), and gives you a proper terminal UI on top of it: a channel/contact sidebar, a scrolling message pane, unread badges, and slash commands - instead of driving the mesh one line at a time.
@@ -9,8 +11,9 @@ Connects to a MeshCore companion device (over USB serial or BLE), and gives you 
 - **Device picker on startup** - scans for BLE MeshCore devices (`MeshCore-*`) and lists all serial ports, navigate with arrow keys, `Enter` to connect.
 - **Sidebar** listing channels (`Chan: name`) and direct-message contacts (`@ name`), with unread counts.
 - **Persistent history** - the last 50 messages of every chat are remembered across restarts, keyed to the connected node's own public key (so it follows that physical device regardless of which `/dev/ttyACMx` it enumerates as, or whether you connect over USB or BLE).
-- **Slash commands**: `/join`, `/msg`, `/newchannel`, `/delchannel`, `/contacts`, `/channels`, `/clear`, `/quit`, `/help`.
+- **Slash commands**: `/join`, `/msg`, `/newchannel`, `/delchannel`, `/corescope`, `/contacts`, `/channels`, `/clear`, `/quit`, `/help`.
 - **Keyboard-first**: `ctrl+up` / `ctrl+down` to switch chats, `ctrl+l` to clear the pane, `ctrl+q` to quit, `f1` for help.
+- **Live CoreScope analytics panel** - at startup, pick a [CoreScope](https://github.com/Kpa-clawbot/CoreScope) analytics server (from a predefined list in `corescope_servers.txt`, or type your own URL, or skip). A panel at the bottom of the chat screen shows recent hop counts, SNR, and observing nodes for the active channel - a basic view of the path packets took to reach you.
 
 ## Requirements
 
@@ -67,6 +70,7 @@ tmux new -s mesh
 | `/msg <name>` | Open a direct message with a contact |
 | `/newchannel <name> [hex-secret]` | Create/configure a channel. Omit the secret to auto-derive a shared key from the name - anyone who configures the same name joins the same channel. |
 | `/delchannel <name\|#>` | Delete a channel (refuses to delete slot 0 / Public) |
+| `/corescope <url\|off>` | Set or disable the live CoreScope analytics server |
 | `/contacts` | Refresh the contact list from the device |
 | `/channels` | Refresh the channel list from the device |
 | `/clear` | Clear the current pane |
@@ -78,9 +82,17 @@ Outgoing channel messages are automatically prefixed with your node's advertised
 
 Message history lives in `~/.meshcore-chat/history/<node-public-key>.json`, one file per physical node, capped at the last 50 messages per chat. It's identified by the node's public key rather than the connection path, so switching from USB to BLE (or the port renumbering after a reboot) doesn't lose or fork your history - only connecting to a genuinely different node does.
 
+## CoreScope live analytics
+
+[CoreScope](https://github.com/Kpa-clawbot/CoreScope) is a separate, community-run MeshCore packet analyzer with a public REST API (no auth required by default). This app queries `GET /api/channels/{name}/messages` for the currently active channel and shows, per recent message: sender, hop count, SNR, and which observer nodes on that CoreScope instance saw the packet - a basic proxy for "what path did this take."
+
+Predefined servers are read from `corescope_servers.txt` (one `Name = https://host` per line, `#` for comments) and offered in the startup picker alongside a free-text URL field and a skip option. Change or disable it later at any time with `/corescope <url>` / `/corescope off`. It only covers channels (group broadcasts) - direct messages are point-to-point encrypted and aren't visible to a passive analyzer, so the panel shows a placeholder for those.
+
 ## Project layout
 
-- `app.py` - the Textual application (device picker screen + chat screen)
+- `app.py` - the Textual application (device picker screen, CoreScope server picker screen, chat screen)
 - `mc_client.py` - thin async wrapper around the `meshcore` library
 - `history_store.py` - per-device message history persistence
+- `corescope_client.py` - thin async client for the CoreScope REST API
+- `corescope_servers.txt` - predefined CoreScope server list offered at startup
 - `run.sh` - launcher
