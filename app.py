@@ -713,7 +713,9 @@ class ChatScreen(Screen):
         elif cmd in ("msg", "dm", "query"):
             self.open_dm(arg)
         elif cmd in ("contacts", "c"):
-            await self.client.mc.ensure_contacts(follow=True)
+            # A user-initiated refresh must hit the wire unconditionally - see
+            # the comment on the identical call in add_contact_cmd() below.
+            await self.client.mc.commands.get_contacts()
             self.rebuild_sidebar()
             log.write("[dim]contact list refreshed[/]")
         elif cmd in ("channels",):
@@ -724,6 +726,12 @@ class ChatScreen(Screen):
             await self.create_channel(arg)
         elif cmd in ("delchannel", "rmchannel", "leave"):
             await self.delete_channel(arg)
+        elif cmd == "addcontact":
+            await self.add_contact_cmd(arg)
+        elif cmd in ("importcontact", "ic"):
+            await self.import_contact_cmd(arg)
+        elif cmd in ("mycard", "card", "exportcontact", "ec"):
+            await self.export_card_cmd(arg)
         elif cmd == "corescope":
             await self.set_corescope(arg)
         elif cmd in ("reply", "r"):
@@ -809,6 +817,73 @@ class ChatScreen(Screen):
                 self.query_one("#chatlog", RichLog).clear()
                 self.update_status()
 
+    async def add_contact_cmd(self, arg: str) -> None:
+        log = self.query_one("#chatlog", RichLog)
+        parts = arg.split(maxsplit=1)
+        if len(parts) < 2:
+            log.write("[bold red]Usage: /addcontact <pubkey-hex> <name>[/]")
+            return
+        pubkey, name = parts[0], parts[1]
+        if len(pubkey) != 64 or any(c not in "0123456789abcdefABCDEF" for c in pubkey):
+            log.write(f"[bold red]Public key must be 64 hex characters (got {len(pubkey)})[/]")
+            return
+
+        res = await self.client.add_contact_raw(pubkey, name)
+        if res is None or res.type == EventType.ERROR:
+            reason = res.payload.get("reason", res.payload) if res else "no response"
+            log.write(f"[bold red]Could not add contact:[/] {reason}")
+            return
+
+        # ensure_contacts(follow=True) only refetches if the client's internal
+        # "dirty" flag is set (which only happens on an incoming advert/path-update
+        # push event) - a user-initiated refresh, or one right after we just changed
+        # something ourselves, must hit the wire unconditionally instead.
+        await self.client.mc.commands.get_contacts()
+        self.rebuild_sidebar()
+        log.write(f"[bold green]Added contact '{name}'[/]")
+
+    async def import_contact_cmd(self, arg: str) -> None:
+        log = self.query_one("#chatlog", RichLog)
+        if not arg.startswith("meshcore://"):
+            log.write("[bold red]Usage: /importcontact meshcore://<hex>  (a card someone shared with you)[/]")
+            return
+        try:
+            res = await self.client.import_contact_uri(arg)
+        except ValueError as exc:
+            log.write(f"[bold red]{exc}[/]")
+            return
+
+        if res is None or res.type == EventType.ERROR:
+            reason = res.payload.get("reason", res.payload) if res else "no response"
+            log.write(f"[bold red]Could not import contact:[/] {reason}")
+            return
+
+        self.rebuild_sidebar()
+        log.write("[bold green]Contact imported[/]")
+
+    async def export_card_cmd(self, arg: str) -> None:
+        log = self.query_one("#chatlog", RichLog)
+        contact = None
+        label = "Your own"
+        if arg:
+            match = None
+            for key in self.target_order:
+                t = self.targets[key]
+                if t.kind == "dm" and isinstance(t.dst, dict) and arg.lower() in t.label.lower():
+                    match = t
+                    break
+            if match is None:
+                log.write(f"[bold red]No contact matching '{arg}'[/]")
+                return
+            contact = match.dst
+            label = match.label
+
+        uri = await self.client.export_contact_uri(contact)
+        if uri is None:
+            log.write("[bold red]Could not export contact card[/]")
+            return
+        log.write(f"[bold]{label} card (share this for others to /importcontact):[/]\n{uri}")
+
     def open_dm(self, arg: str) -> None:
         if not arg:
             self.query_one("#chatlog", RichLog).write("[bold red]Usage: /msg <name>[/]")
@@ -831,6 +906,9 @@ class ChatScreen(Screen):
             "  /msg <name>      open a direct message with a contact\n"
             "  /newchannel <name> [hex-secret]   create/configure a channel\n"
             "  /delchannel <name|#>   delete a channel\n"
+            "  /addcontact <pubkey-hex> <name>   add a contact you know the key of\n"
+            "  /importcontact meshcore://<hex>   import a contact someone shared with you\n"
+            "  /mycard [name]   get a shareable meshcore:// card (yours, or a known contact's)\n"
             "  /corescope <url|off>   set/disable the live analytics server\n"
             "  /reply           pick a recent message to reply to (click or arrow+Enter)\n"
             "  /contacts        refresh contact list\n"

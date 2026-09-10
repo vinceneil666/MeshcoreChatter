@@ -93,6 +93,41 @@ class MeshCoreClient:
         await self.fetch_channels(force=True)
         return None
 
+    async def add_contact_raw(self, pubkey_hex: str, name: str, contact_type: int = 1):
+        """Manually add a contact you already know the public key of (no advert or
+        shared card needed). contact_type defaults to 1 (CHAT)."""
+        contact = {
+            "public_key": pubkey_hex,
+            "type": contact_type,
+            "flags": 0,
+            "out_path_len": 0,
+            "out_path": "",
+            "out_path_hash_mode": 0,
+            "adv_name": name,
+            "adv_lat": 0,
+            "adv_lon": 0,
+            "last_advert": 0,
+        }
+        return await self.mc.commands.add_contact(contact)
+
+    async def import_contact_uri(self, uri: str):
+        """Import a contact from a shared meshcore:// card URI."""
+        if not uri.startswith("meshcore://"):
+            raise ValueError("Contact URI must start with meshcore://")
+        card_data = bytes.fromhex(uri[len("meshcore://"):])
+        res = await self.mc.commands.import_contact(card_data)
+        if res is not None and res.type != EventType.ERROR:
+            await self.mc.commands.get_contacts()
+        return res
+
+    async def export_contact_uri(self, contact: Optional[dict] = None) -> Optional[str]:
+        """Get a shareable meshcore:// URI for a contact, or for this node itself
+        (contact=None) - the "card" you hand someone else to import."""
+        res = await self.mc.commands.export_contact(contact)
+        if res is None or res.type == EventType.ERROR:
+            return None
+        return res.payload["uri"]
+
     async def send_channel(self, idx: int, text: str):
         return await self.mc.commands.send_chan_msg(idx, text)
 

@@ -9,10 +9,11 @@ Connects to a MeshCore companion device (over USB serial or BLE), and gives you 
 - **Device picker on startup** - scans for BLE MeshCore devices (`MeshCore-*`) and lists all serial ports, navigate with arrow keys, `Enter` to connect.
 - **Sidebar** listing channels (`Chan: name`) and direct-message contacts (`@ name`), with unread counts.
 - **Persistent history** - the last 50 messages of every chat are remembered across restarts, keyed to the connected node's own public key (so it follows that physical device regardless of which `/dev/ttyACMx` it enumerates as, or whether you connect over USB or BLE).
-- **Slash commands**: `/join`, `/msg`, `/newchannel`, `/delchannel`, `/corescope`, `/reply`, `/contacts`, `/channels`, `/clear`, `/quit`, `/help`.
+- **Slash commands**: `/join`, `/msg`, `/newchannel`, `/delchannel`, `/addcontact`, `/importcontact`, `/mycard`, `/corescope`, `/reply`, `/contacts`, `/channels`, `/clear`, `/quit`, `/help`.
 - **Keyboard-first**: `ctrl+up` / `ctrl+down` to switch chats, `ctrl+r` to reply, `esc` to cancel a reply, `ctrl+l` to clear the pane, `ctrl+q` to quit, `f1` for help.
 - **Live CoreScope analytics panel** - at startup, pick a [CoreScope](https://github.com/Kpa-clawbot/CoreScope) analytics server (from a predefined list in `corescope_servers.txt`, or type your own URL, or skip). A panel at the bottom of the chat screen shows a simple, deduplicated list of the actual repeaters that relayed the last few messages in the active channel (resolved from the packet's real hop path, not just who observed it).
 - **Reply to a message** - `ctrl+r` (or `/reply`) opens a picker of recent messages in the current chat; click one, or arrow-key + Enter. Your next message goes out with a compact quote of the original prepended, and a banner shows what you're replying to until you send or cancel (`Esc`).
+- **Adding contacts** - `/addcontact` a known public key directly, `/importcontact` a card someone shared with you, or `/mycard` to get your own shareable card to hand to someone else.
 
 ## Requirements
 
@@ -69,6 +70,9 @@ tmux new -s mesh
 | `/msg <name>` | Open a direct message with a contact |
 | `/newchannel <name> [hex-secret]` | Create/configure a channel. Omit the secret to auto-derive a shared key from the name - anyone who configures the same name joins the same channel. |
 | `/delchannel <name\|#>` | Delete a channel (refuses to delete slot 0 / Public) |
+| `/addcontact <pubkey-hex> <name>` | Manually add a contact you already know the 64-char public key of |
+| `/importcontact meshcore://<hex>` | Import a contact from a card someone shared with you |
+| `/mycard [name]` | Get a shareable `meshcore://` card - your own node's, or a known contact's, to hand to someone else for `/importcontact` |
 | `/corescope <url\|off>` | Set or disable the live CoreScope analytics server |
 | `/reply` | Open a picker to choose a recent message to reply to |
 | `/contacts` | Refresh the contact list from the device |
@@ -91,6 +95,14 @@ Predefined servers are read from `corescope_servers.txt` (one `Name = https://ho
 ## Replying to a message
 
 MeshCore's own protocol has no concept of threaded replies - there's no message-ID field to point back to. `ctrl+r` opens a picker over your recent messages in the current chat (click a row, or arrow-key + Enter); once picked, your next message is sent with a short quote of the original prepended (`↩Sender: "snippet" | your reply`), which is how the recipient - on this client or any other MeshCore client - sees the context. Only messages sent or received during the current session are pickable (reply targets aren't persisted across restarts). `Esc` cancels a pending reply.
+
+## Adding contacts
+
+MeshCore normally builds your contact list from adverts your node overhears on the mesh, but you can also add someone directly:
+
+- **`/addcontact <pubkey-hex> <name>`** - if you already know someone's full 64-character public key (e.g. from a `pubkey` note, a map, another tool), this adds them straight away with no advert or card needed.
+- **`/importcontact meshcore://<hex>`** - imports a contact from a card someone else exported and sent you (over chat, email, a QR code, however).
+- **`/mycard [name]`** - exports a shareable `meshcore://...` card: with no argument, it's your own node's card (hand this to someone else so *they* can `/importcontact` you); with a name, it re-exports one of your existing contacts' cards to pass along.
 
 ## Project layout
 
