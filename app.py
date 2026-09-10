@@ -55,6 +55,7 @@ class Target:
     dst: object  # channel idx (int) for chan, contact dict / prefix str for dm
     history: list[str] = field(default_factory=list)
     unread: int = 0
+    records: list[dict] = field(default_factory=list)  # {"sender": str|None, "text": str} - reply source, session-only
 
 
 # ---------------------------------------------------------------- picker
@@ -211,6 +212,67 @@ class ServerPickerScreen(Screen):
         self.app.exit()
 
 
+# ------------------------------------------------------------- reply picker
+
+class ReplyPickerScreen(Screen):
+    """Pick a recent message (of the currently active chat) to reply to.
+
+    RichLog (the chat pane) can't reliably report which line was clicked, so
+    this is a dedicated list instead: click a row, or arrow-key + Enter -
+    same interaction as the device/server pickers."""
+
+    CSS = """
+    ReplyPickerScreen {
+        align: center middle;
+    }
+    #reply_box {
+        width: 80%;
+        height: 70%;
+        border: heavy $accent;
+        padding: 1 2;
+    }
+    #reply_status {
+        height: 2;
+        color: $text-muted;
+    }
+    #reply_list {
+        height: 1fr;
+        border: solid $accent;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, records: list[dict]):
+        super().__init__()
+        self.records = records
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Vertical(id="reply_box"):
+            yield Static("Reply to which message?  ↑/↓ + Enter to pick, Esc to cancel.", id="reply_status")
+            yield ListView(id="reply_list")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        list_view = self.query_one("#reply_list", ListView)
+        for rec in reversed(self.records[-20:]):
+            sender = rec.get("sender")
+            text = (rec.get("text") or "").replace("\n", " ")[:70]
+            label = f"{sender}: {text}" if sender else text
+            item = ListItem(Label(label))
+            item.reply_record = rec
+            list_view.append(item)
+        list_view.index = 0
+        list_view.focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self.dismiss(getattr(event.item, "reply_record", None))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # ------------------------------------------------------------------ chat
 
 class ChatScreen(Screen):
@@ -252,6 +314,11 @@ class ChatScreen(Screen):
         padding: 0 1;
         color: $text-muted;
     }
+    #reply_banner {
+        height: 1;
+        background: $warning 30%;
+        padding: 0 1;
+    }
     ListItem {
         padding: 0 1;
     }
@@ -270,6 +337,8 @@ class ChatScreen(Screen):
         Binding("ctrl+up", "prev_target", "Prev chat"),
         Binding("ctrl+down", "next_target", "Next chat"),
         Binding("ctrl+l", "clear_pane", "Clear"),
+        Binding("ctrl+r", "open_reply_picker", "Reply"),
+        Binding("escape", "cancel_reply", "Cancel reply"),
     ]
 
     def __init__(self, connection: tuple[str, str], corescope_url: str | None = None):
@@ -285,6 +354,7 @@ class ChatScreen(Screen):
         self.corescope: CoreScopeClient | None = None
         if corescope_url:
             self.corescope = CoreScopeClient(corescope_url)
+        self.reply_target: dict | None = None
 
     # ------------------------------------------------------------------ UI
 
@@ -297,11 +367,13 @@ class ChatScreen(Screen):
                 yield Static("Connecting...", id="statusbar")
                 yield RichLog(id="chatlog", wrap=True, markup=True, highlight=False)
                 yield Static("", id="corescope_panel")
-                yield Input(placeholder="Message, or /help for commands", id="input")
+                yield Static("", id="reply_banner")
+                yield Input(placeholder="Message, or /help for commands (ctrl+r to reply)", id="input")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#input", Input).focus()
+        self.query_one("#reply_banner", Static).display = False
         self.run_worker(self.startup(), exclusive=True)
         self.set_interval(15, self.trigger_corescope_refresh)
 
@@ -484,7 +556,7 @@ class ChatScreen(Screen):
 
     # ------------------------------------------------------------- receive
 
-    def _append(self, key: str, line: str) -> None:
+    def _append(self, key: str, line: str, record: dict | None = None) -> None:
         if key not in self.targets:
             # message from a contact/channel not yet in the sidebar
             self.targets[key] = Target(
@@ -501,6 +573,10 @@ class ChatScreen(Screen):
         t.history.append(line)
         if len(t.history) > history_store.MAX_MESSAGES:
             t.history = t.history[-history_store.MAX_MESSAGES:]
+        if record is not None:
+            t.records.append(record)
+            if len(t.records) > history_store.MAX_MESSAGES:
+                t.records = t.records[-history_store.MAX_MESSAGES:]
         if key == self.active_key:
             self.query_one("#chatlog", RichLog).write(line)
         else:
@@ -524,14 +600,19 @@ class ChatScreen(Screen):
         name = contact["adv_name"] if contact else data["pubkey_prefix"]
         key = f"dm#{(contact['public_key'][:12] if contact else data['pubkey_prefix'])}"
         ts = time.strftime("%H:%M:%S")
-        self._append(key, f"[dim]{ts}[/] [bold cyan]{name}[/]: {data['text']}")
+        text = data["text"]
+        self._append(key, f"[dim]{ts}[/] [bold cyan]{name}[/]: {text}", {"sender": name, "text": text})
 
     async def on_channel_msg(self, event) -> None:
         data = event.payload
         idx = data["channel_idx"]
         key = f"chan#{idx}"
         ts = time.strftime("%H:%M:%S")
-        self._append(key, f"[dim]{ts}[/] {data['text']}")
+        text = data["text"]
+        # MeshCore channel packets carry no sender identity of their own - by
+        # convention (and our own outgoing prefixing) the name is baked into
+        # the text itself, so there's no separate "sender" to record here.
+        self._append(key, f"[dim]{ts}[/] {text}", {"sender": None, "text": text})
 
     # --------------------------------------------------------------- send
 
@@ -548,21 +629,35 @@ class ChatScreen(Screen):
             return
         await self.send_to_active(text)
 
+    def _reply_prefix(self) -> str:
+        if not self.reply_target:
+            return ""
+        rec = self.reply_target
+        snippet = (rec.get("text") or "").replace("\n", " ").strip()
+        if len(snippet) > 24:
+            snippet = snippet[:24] + "…"
+        who = rec.get("sender")
+        return f'↩{who}: "{snippet}" | ' if who else f'↩"{snippet}" | '
+
     async def send_to_active(self, text: str) -> None:
         t = self.targets[self.active_key]
         log = self.query_one("#chatlog", RichLog)
         ts = time.strftime("%H:%M:%S")
 
+        text = f"{self._reply_prefix()}{text}"
+        self.reply_target = None
+        self.update_reply_banner()
+
         if t.kind == "chan":
             full_text = f"{self.client.self_name}: {text}"
             line = f"[dim]{ts}[/] [bold green]{self.client.self_name}[/]: {text}"
-            self._append(t.key, line)
+            self._append(t.key, line, {"sender": self.client.self_name, "text": text})
             res = await self.client.send_channel(t.dst, full_text)
             if res is None or res.type == EventType.ERROR:
                 log.write("[bold red]  ^ failed to send[/]")
         else:
             line = f"[dim]{ts}[/] [bold green]{self.client.self_name}[/]: {text}"
-            self._append(t.key, line)
+            self._append(t.key, line, {"sender": self.client.self_name, "text": text})
             ok = await self.client.send_dm(t.dst, text)
             if not ok:
                 log.write("[bold red]  ^ no ack, delivery uncertain[/]")
@@ -597,6 +692,8 @@ class ChatScreen(Screen):
             await self.delete_channel(arg)
         elif cmd == "corescope":
             await self.set_corescope(arg)
+        elif cmd in ("reply", "r"):
+            self.action_open_reply_picker()
         elif cmd == "clear":
             self.action_clear_pane()
         else:
@@ -701,11 +798,12 @@ class ChatScreen(Screen):
             "  /newchannel <name> [hex-secret]   create/configure a channel\n"
             "  /delchannel <name|#>   delete a channel\n"
             "  /corescope <url|off>   set/disable the live analytics server\n"
+            "  /reply           pick a recent message to reply to (click or arrow+Enter)\n"
             "  /contacts        refresh contact list\n"
             "  /channels        refresh channel list\n"
             "  /clear           clear the current pane\n"
             "  /quit            exit\n"
-            "[bold]Keys:[/] ctrl+up/ctrl+down switch chats, ctrl+l clear, ctrl+q quit"
+            "[bold]Keys:[/] ctrl+up/ctrl+down switch chats, ctrl+r reply, esc cancel reply, ctrl+l clear, ctrl+q quit"
         )
 
     # ------------------------------------------------------------- actions
@@ -716,6 +814,7 @@ class ChatScreen(Screen):
     def action_clear_pane(self) -> None:
         if self.active_key:
             self.targets[self.active_key].history.clear()
+            self.targets[self.active_key].records.clear()
         self.query_one("#chatlog", RichLog).clear()
 
     def action_next_target(self) -> None:
@@ -736,6 +835,40 @@ class ChatScreen(Screen):
 
     def action_quit_app(self) -> None:
         self.app.exit()
+
+    # -------------------------------------------------------------- reply
+
+    def update_reply_banner(self) -> None:
+        banner = self.query_one("#reply_banner", Static)
+        if self.reply_target:
+            snippet = (self.reply_target.get("text") or "").replace("\n", " ")[:50]
+            who = self.reply_target.get("sender")
+            prefix = f"{who}: " if who else ""
+            banner.update(f"[b]Replying to[/] {prefix}\"{snippet}\"  (Esc to cancel)")
+            banner.display = True
+        else:
+            banner.display = False
+
+    def action_cancel_reply(self) -> None:
+        if self.reply_target:
+            self.reply_target = None
+            self.update_reply_banner()
+
+    def action_open_reply_picker(self) -> None:
+        self.run_worker(self._open_reply_picker(), exclusive=True, group="reply_picker")
+
+    async def _open_reply_picker(self) -> None:
+        if self.active_key is None:
+            return
+        t = self.targets[self.active_key]
+        if not t.records:
+            self.query_one("#chatlog", RichLog).write("[dim]No messages yet in this chat to reply to[/]")
+            return
+        record = await self.app.push_screen_wait(ReplyPickerScreen(t.records))
+        if record:
+            self.reply_target = record
+            self.update_reply_banner()
+        self.query_one("#input", Input).focus()
 
     async def on_unmount(self) -> None:
         await self.client.disconnect()
