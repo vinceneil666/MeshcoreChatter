@@ -12,7 +12,7 @@ Connects to a MeshCore companion device (over USB serial or BLE), and gives you 
 - **Slash commands**: `/join`, `/msg`, `/newchannel`, `/delchannel`, `/addcontact`, `/importcontact`, `/mycard`, `/corescope`, `/reply`, `/contacts`, `/channels`, `/clear`, `/quit`, `/help`.
 - **Keyboard-first**: `ctrl+up` / `ctrl+down` to switch chats, `ctrl+r` to reply, `esc` to cancel a reply, `ctrl+l` to clear the pane, `ctrl+q` to quit, `f1` for help, `f2` for app info.
 - **Live CoreScope analytics panel** - at startup, pick a [CoreScope](https://github.com/Kpa-clawbot/CoreScope) analytics server (from a predefined list in `corescope_servers.txt`, or type your own URL, or skip). A panel at the bottom of the chat screen shows a simple, deduplicated list of the actual repeaters that relayed the last few messages in the active channel (resolved from the packet's real hop path, not just who observed it).
-- **Reply to a message** - `ctrl+r` (or `/reply`) opens a picker of recent messages in the current chat; click one, or arrow-key + Enter. Your next message goes out with a compact quote of the original prepended, and a banner shows what you're replying to until you send or cancel (`Esc`).
+- **Reply to a message** - `ctrl+r` (or `/reply`) opens a picker of recent messages in the current chat; click one, or arrow-key + Enter. Your next message goes out prefixed with just the original sender's name, and a banner shows who you're replying to until you send or cancel (`Esc`).
 - **Adding contacts** - `/addcontact` a known public key directly, `/importcontact` a card someone shared with you, or `/mycard` to get your own shareable card to hand to someone else.
 
 ## Requirements
@@ -100,7 +100,7 @@ CoreScope's own remote observer(s) can hear channel traffic your node never did,
 
 ## Replying to a message
 
-MeshCore's own protocol has no concept of threaded replies - there's no message-ID field to point back to. `ctrl+r` opens a picker over your recent messages in the current chat (click a row, or arrow-key + Enter); once picked, your next message is sent with a short quote of the original prepended (`↩Sender: "snippet" | your reply`), which is how the recipient - on this client or any other MeshCore client - sees the context. Only messages sent or received during the current session are pickable (reply targets aren't persisted across restarts). `Esc` cancels a pending reply.
+MeshCore's own protocol has no concept of threaded replies - there's no message-ID field to point back to. `ctrl+r` opens a picker over your recent messages in the current chat (click a row, or arrow-key + Enter); once picked, your next message is sent with just the original sender's name prepended, using the `@[Name] message` mention style already used natively by other clients on the mesh - no quoted excerpt of the original message, only who you're replying to. If the original message has no identifiable sender, name inference falls back to whatever convention the sender's own client used to bake identity into the text - either that same `@[Name] message` style, or the plainer `Name: message` style - and if neither is present (e.g. a bare "ping"), no prefix is added at all. Only messages sent or received during the current session are pickable (reply targets aren't persisted across restarts). `Esc` cancels a pending reply.
 
 ## Adding contacts
 
