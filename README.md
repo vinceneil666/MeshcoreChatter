@@ -95,6 +95,8 @@ Predefined servers are read from `corescope_servers.txt` (one `Name = https://ho
 
 By default the panel shows the deduplicated repeater-list view above. Switch to `/corescope view paths` for a per-message view instead: the last 4 messages in the active channel, each with a shortened text snippet followed by the raw hop path its packet took (e.g. `"Hei"  ->  4DFF5A -> B13244`) - useful for seeing which specific route each message actually traveled, rather than just the pooled set of repeaters involved. `/corescope view repeaters` switches back.
 
+CoreScope's own remote observer(s) can hear channel traffic your node never did, so the paths view checks each message against your own chat history for that channel and appends `(not received locally)` to any message CoreScope saw that your node didn't.
+
 ## Replying to a message
 
 MeshCore's own protocol has no concept of threaded replies - there's no message-ID field to point back to. `ctrl+r` opens a picker over your recent messages in the current chat (click a row, or arrow-key + Enter); once picked, your next message is sent with a short quote of the original prepended (`↩Sender: "snippet" | your reply`), which is how the recipient - on this client or any other MeshCore client - sees the context. Only messages sent or received during the current session are pickable (reply targets aren't persisted across restarts). `Esc` cancels a pending reply.
