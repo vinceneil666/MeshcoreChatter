@@ -636,7 +636,9 @@ class ChatScreen(Screen):
     # observer heard (possibly via a shorter/faster path) can still be
     # in-flight to our own node. Anything younger than this is "still
     # verifying" rather than asserted as unreceived.
-    PATHS_VIEW_GRACE_SECONDS = 20
+    # Multi-hop LoRa delivery with repeater backoff/retries can genuinely
+    # take tens of seconds - 20s proved too tight in practice.
+    PATHS_VIEW_GRACE_SECONDS = 60
 
     def _message_age_seconds(self, m: dict) -> float:
         """Seconds since CoreScope first saw this packet. Missing/unparseable
@@ -650,14 +652,26 @@ class ChatScreen(Screen):
             return float("inf")
         return (datetime.now(timezone.utc) - seen).total_seconds()
 
-    def _received_locally(self, t: Target, wire_text: str) -> bool:
-        """Whether the given raw on-air packet text matches something this
+    def _received_locally(self, t: Target, wire_text: str, sender_timestamp: int | None) -> bool:
+        """Whether the given raw on-air packet matches something this
         client's own companion node actually saw for this channel - CoreScope
         sees everything its own remote observer(s) hear, which is not
-        necessarily the same set of packets our node received."""
+        necessarily the same set of packets our node received.
+
+        Primary check: exact (sender_timestamp, text) match against this
+        session's own records - sender_timestamp is the epoch second the
+        original sender embedded in the packet, which CoreScope reports back
+        verbatim, so this is precise regardless of message content.
+        Fallback: a plain-text substring match against persisted history
+        (markup stripped), for records from before this field was tracked,
+        or once a session's in-memory records have aged out."""
         wire_text = (wire_text or "").strip()
         if not wire_text:
             return False
+        if sender_timestamp is not None:
+            for rec in t.records:
+                if rec.get("sender_timestamp") == sender_timestamp and (rec.get("text") or "").strip() == wire_text:
+                    return True
         for line in t.history:
             # strip Rich markup tags (e.g. "[dim]...[/]") so the comparison is
             # against plain text, not the formatted display line
@@ -681,7 +695,7 @@ class ChatScreen(Screen):
             except Exception:
                 path = []
             path_str = " -> ".join(path) if path else "(direct, no repeaters)"
-            if self._received_locally(t, wire_text):
+            if self._received_locally(t, wire_text, m.get("sender_timestamp")):
                 flag = ""
             elif self._message_age_seconds(m) < self.PATHS_VIEW_GRACE_SECONDS:
                 flag = "  [dim](verifying...)[/]"
@@ -767,10 +781,15 @@ class ChatScreen(Screen):
         key = f"chan#{idx}"
         ts = time.strftime("%H:%M:%S")
         text = data["text"]
-        # MeshCore channel packets carry no sender identity of their own - by
-        # convention (and our own outgoing prefixing) the name is baked into
-        # the text itself, so there's no separate "sender" to record here.
-        self._append(key, f"[dim]{ts}[/] {text}", {"sender": None, "text": text})
+        # MeshCore channel packets carry no sender identity of their own, so
+        # there's nothing to record as "sender" here - other clients may
+        # bake a name into the text by convention, but that's just part of
+        # the message content as far as this app is concerned.
+        # sender_timestamp is the epoch second the original sender embedded
+        # in the packet - kept so the CoreScope paths view can match this
+        # exact message against what CoreScope itself reports for it.
+        self._append(key, f"[dim]{ts}[/] {text}",
+                      {"sender": None, "text": text, "sender_timestamp": data.get("sender_timestamp")})
 
     # --------------------------------------------------------------- send
 
@@ -807,9 +826,10 @@ class ChatScreen(Screen):
         self.update_reply_banner()
 
         if t.kind == "chan":
+            sender_ts = int(time.time())
             line = f"[dim]{ts}[/] [bold green]{self.client.self_name}[/]: {text}"
-            self._append(t.key, line, {"sender": self.client.self_name, "text": text})
-            res = await self.client.send_channel(t.dst, text)
+            self._append(t.key, line, {"sender": self.client.self_name, "text": text, "sender_timestamp": sender_ts})
+            res = await self.client.send_channel(t.dst, text, timestamp=sender_ts)
             if res is None or res.type == EventType.ERROR:
                 log.write("[bold red]  ^ failed to send[/]")
         else:

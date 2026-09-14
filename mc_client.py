@@ -128,8 +128,13 @@ class MeshCoreClient:
             return None
         return res.payload["uri"]
 
-    async def send_channel(self, idx: int, text: str):
-        return await self.mc.commands.send_chan_msg(idx, text)
+    async def send_channel(self, idx: int, text: str, timestamp: Optional[int] = None):
+        """timestamp is the epoch second embedded in the packet as
+        sender_timestamp (defaults to send-time if omitted) - callers that
+        need to know exactly what was embedded (e.g. to later correlate with
+        an analytics server's own decode of the same packet) should pass it
+        explicitly rather than relying on the library's internal default."""
+        return await self.mc.commands.send_chan_msg(idx, text, timestamp=timestamp)
 
     async def send_dm(self, dst, text: str):
         """dst may be a full contact dict, or a raw pubkey-prefix hex string
