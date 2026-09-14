@@ -293,6 +293,43 @@ class ReplyPickerScreen(Screen):
         self.dismiss(None)
 
 
+# ----------------------------------------------------------------- info
+
+class InfoScreen(Screen):
+    """Small popup with app info: what it is, who made it, and where to find it."""
+
+    CSS = """
+    InfoScreen {
+        align: center middle;
+    }
+    #info_box {
+        width: 60;
+        height: auto;
+        border: heavy $accent;
+        padding: 1 2;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "Close"),
+        Binding("f2", "close", "Close"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="info_box"):
+            yield Static(
+                "[bold]MeshCoreChatter v2.0[/]\n\n"
+                "An IRC-style terminal chat client for a MeshCore companion\n"
+                "radio node, with live CoreScope routing analytics.\n\n"
+                "Developer: vinceneil666\n"
+                "GitHub: https://github.com/vinceneil666/MeshcoreChatter\n\n"
+                "[dim]Press F2 or Esc to close[/]"
+            )
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
 # ------------------------------------------------------------------ chat
 
 class ChatScreen(Screen):
@@ -354,6 +391,7 @@ class ChatScreen(Screen):
     BINDINGS = [
         Binding("ctrl+q", "quit_app", "Quit"),
         Binding("f1", "show_help", "Help"),
+        Binding("f2", "show_info", "Info"),
         Binding("ctrl+up", "prev_target", "Prev chat"),
         Binding("ctrl+down", "next_target", "Next chat"),
         Binding("ctrl+l", "clear_pane", "Clear"),
@@ -494,9 +532,9 @@ class ChatScreen(Screen):
         if self.active_key and self.active_key in self.targets:
             t = self.targets[self.active_key]
             kind = "channel" if t.kind == "chan" else "direct message"
-            bar.update(f"[b]{self.client.self_name}[/]  |  {kind}: [b]{t.label}[/]  |  ctrl+up/down: switch  |  /help: commands")
+            bar.update(f"[b]{self.client.self_name}[/]  |  {kind}: [b]{t.label}[/]  |  ctrl+up/down: switch  |  /help: commands  |  F2: info")
         else:
-            bar.update(f"[b]{self.client.self_name}[/]  |  no chat selected")
+            bar.update(f"[b]{self.client.self_name}[/]  |  no chat selected  |  F2: info")
 
     # -------------------------------------------------------------- switch
 
@@ -985,6 +1023,9 @@ class ChatScreen(Screen):
     def action_show_help(self) -> None:
         self.show_help()
 
+    def action_show_info(self) -> None:
+        self.app.push_screen(InfoScreen())
+
     def action_clear_pane(self) -> None:
         if self.active_key:
             self.targets[self.active_key].history.clear()
@@ -1053,6 +1094,8 @@ class ChatScreen(Screen):
 # ------------------------------------------------------------------- app
 
 class MeshChatApp(App):
+    TITLE = "MeshCoreChatter v2.0"
+
     def __init__(self, connection: tuple[str, str] | None = None, corescope_url: str | None = None):
         super().__init__()
         self.initial_connection = connection  # set (e.g. via CLI arg) to skip the device picker
