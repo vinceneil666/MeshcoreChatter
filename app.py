@@ -22,7 +22,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Header, Footer, Input, Label, ListItem, ListView, RichLog, Static
+from textual.widgets import Button, Header, Footer, Input, Label, ListItem, ListView, RichLog, Static
 
 from mc_client import MeshCoreClient
 from meshcore import EventType
@@ -331,6 +331,136 @@ class InfoScreen(Screen):
         self.dismiss()
 
 
+# ------------------------------------------------------------ node settings
+
+class NodeSettingsScreen(Screen):
+    """Edit a subset of the connected node's own companion-protocol
+    settings: name, location, TX power, radio params, and the device PIN.
+
+    Deliberately excludes anything destructive or sensitive (factory
+    reset, private key export/import) - those need stronger safeguards
+    than a plain settings form and aren't exposed here.
+
+    Current values come from the SELF_INFO snapshot captured at connect
+    time (`self.mc.self_info`) - the companion protocol has no getter for
+    the device PIN itself, so that field always starts blank; leaving it
+    blank leaves the PIN unchanged."""
+
+    CSS = """
+    NodeSettingsScreen {
+        align: center middle;
+    }
+    #settings_box {
+        width: 64;
+        height: auto;
+        border: heavy $accent;
+        padding: 1 2;
+    }
+    #settings_box Label {
+        margin-top: 1;
+        color: $text-muted;
+    }
+    #settings_status {
+        margin-top: 1;
+        color: $text-muted;
+    }
+    #settings_buttons {
+        margin-top: 1;
+        height: auto;
+        align-horizontal: right;
+    }
+    #settings_buttons Button {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, self_info: dict):
+        super().__init__()
+        self.self_info = self_info
+
+    def compose(self) -> ComposeResult:
+        info = self.self_info
+        with Vertical(id="settings_box"):
+            yield Static("[bold]Node Settings[/]")
+            yield Label("Name")
+            yield Input(value=str(info.get("name", "")), id="set_name")
+            yield Label("Location (lat, lon)")
+            yield Input(value=f"{info.get('adv_lat', 0)}, {info.get('adv_lon', 0)}", id="set_coords")
+            yield Label(f"TX power, dBm (max {info.get('max_tx_power', '?')})")
+            yield Input(value=str(info.get("tx_power", "")), id="set_txpower")
+            yield Label("Radio: freq, bw, sf, cr")
+            yield Input(
+                value=f"{info.get('radio_freq', '')}, {info.get('radio_bw', '')}, "
+                      f"{info.get('radio_sf', '')}, {info.get('radio_cr', '')}",
+                id="set_radio",
+            )
+            yield Label("Device PIN (leave blank to keep unchanged)")
+            yield Input(password=True, id="set_pin")
+            yield Static("", id="settings_status")
+            with Horizontal(id="settings_buttons"):
+                yield Button("Cancel", id="btn_cancel")
+                yield Button("Save", id="btn_save", variant="primary")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn_save":
+            self._save()
+
+    def _save(self) -> None:
+        status = self.query_one("#settings_status", Static)
+        info = self.self_info
+        changes: dict = {}
+
+        name = self.query_one("#set_name", Input).value.strip()
+        if name and name != info.get("name", ""):
+            changes["name"] = name
+
+        coords_raw = self.query_one("#set_coords", Input).value.strip()
+        try:
+            lat_str, lon_str = coords_raw.split(",", 1)
+            lat, lon = float(lat_str), float(lon_str)
+        except ValueError:
+            status.update("[bold red]Location must be 'lat, lon' (e.g. 59.9623, 11.0421)[/]")
+            return
+        if round(lat, 6) != round(float(info.get("adv_lat", 0)), 6) or round(lon, 6) != round(float(info.get("adv_lon", 0)), 6):
+            changes["coords"] = (lat, lon)
+
+        txpower_raw = self.query_one("#set_txpower", Input).value.strip()
+        try:
+            txpower = int(txpower_raw)
+        except ValueError:
+            status.update("[bold red]TX power must be a whole number[/]")
+            return
+        if txpower != info.get("tx_power"):
+            changes["tx_power"] = txpower
+
+        radio_raw = self.query_one("#set_radio", Input).value.strip()
+        try:
+            freq_str, bw_str, sf_str, cr_str = [p.strip() for p in radio_raw.split(",")]
+            freq, bw, sf, cr = float(freq_str), float(bw_str), int(sf_str), int(cr_str)
+        except ValueError:
+            status.update("[bold red]Radio must be 'freq, bw, sf, cr' (e.g. 869.618, 62.5, 8, 8)[/]")
+            return
+        if (freq, bw, sf, cr) != (info.get("radio_freq"), info.get("radio_bw"), info.get("radio_sf"), info.get("radio_cr")):
+            changes["radio"] = (freq, bw, sf, cr)
+
+        pin_raw = self.query_one("#set_pin", Input).value.strip()
+        if pin_raw:
+            try:
+                changes["pin"] = int(pin_raw)
+            except ValueError:
+                status.update("[bold red]Device PIN must be numeric[/]")
+                return
+
+        self.dismiss(changes)
+
+
 # ------------------------------------------------------------------ chat
 
 class ChatScreen(Screen):
@@ -393,6 +523,7 @@ class ChatScreen(Screen):
         Binding("ctrl+q", "quit_app", "Quit"),
         Binding("f1", "show_help", "Help"),
         Binding("f2", "show_info", "Info"),
+        Binding("f3", "open_settings", "Settings"),
         Binding("ctrl+up", "prev_target", "Prev chat"),
         Binding("ctrl+down", "next_target", "Next chat"),
         Binding("ctrl+l", "clear_pane", "Clear"),
@@ -409,6 +540,7 @@ class ChatScreen(Screen):
         self.active_key: str | None = None
         self.list_item_by_key: dict[str, ListItem] = {}
         self.device_id: str | None = None
+        self.mc = None  # set to self.client.mc once startup() connects successfully
         self.saved_chats: dict[str, dict] = {}  # {key: {"history": [...], "records": [...]}}
         self.corescope: CoreScopeClient | None = None
         if corescope_url:
@@ -537,9 +669,9 @@ class ChatScreen(Screen):
         if self.active_key and self.active_key in self.targets:
             t = self.targets[self.active_key]
             kind = "channel" if t.kind == "chan" else "direct message"
-            bar.update(f"[b]{self.client.self_name}[/]  |  {kind}: [b]{t.label}[/]  |  ctrl+up/down: switch  |  /help: commands  |  F2: info")
+            bar.update(f"[b]{self.client.self_name}[/]  |  {kind}: [b]{t.label}[/]  |  ctrl+up/down: switch  |  /help: commands  |  F2: info  |  F3: settings")
         else:
-            bar.update(f"[b]{self.client.self_name}[/]  |  no chat selected  |  F2: info")
+            bar.update(f"[b]{self.client.self_name}[/]  |  no chat selected  |  F2: info  |  F3: settings")
 
     # -------------------------------------------------------------- switch
 
@@ -916,6 +1048,8 @@ class ChatScreen(Screen):
             await self.set_corescope(arg)
         elif cmd in ("reply", "r"):
             self.action_open_reply_picker()
+        elif cmd == "settings":
+            self.action_open_settings()
         elif cmd == "clear":
             self.action_clear_pane()
         else:
@@ -1092,11 +1226,12 @@ class ChatScreen(Screen):
             "  /corescope <url|off>   set/disable the live analytics server\n"
             "  /corescope view <repeaters|paths>   switch the analytics panel view\n"
             "  /reply           pick a recent message to reply to (click or arrow+Enter)\n"
+            "  /settings        edit this node's own settings (name, location, radio, etc.)\n"
             "  /contacts        refresh contact list\n"
             "  /channels        refresh channel list\n"
             "  /clear           clear the current pane\n"
             "  /quit            exit\n"
-            "[bold]Keys:[/] ctrl+up/ctrl+down switch chats, ctrl+r reply, esc cancel reply, ctrl+l clear, ctrl+q quit"
+            "[bold]Keys:[/] ctrl+up/ctrl+down switch chats, ctrl+r reply, esc cancel reply, ctrl+l clear, ctrl+q quit, f3 settings"
         )
 
     # ------------------------------------------------------------- actions
@@ -1106,6 +1241,49 @@ class ChatScreen(Screen):
 
     def action_show_info(self) -> None:
         self.app.push_screen(InfoScreen())
+
+    def action_open_settings(self) -> None:
+        self.run_worker(self._open_settings(), exclusive=True, group="node_settings")
+
+    async def _open_settings(self) -> None:
+        log = self.query_one("#chatlog", RichLog)
+        if self.mc is None or not self.mc.self_info:
+            log.write("[dim]Not connected yet - can't read node settings[/]")
+            return
+        changes = await self.app.push_screen_wait(NodeSettingsScreen(dict(self.mc.self_info)))
+        if not changes:
+            return
+
+        commands = self.client.mc.commands
+        applied: list[str] = []
+        for key, value in changes.items():
+            try:
+                if key == "name":
+                    res = await commands.set_name(value)
+                elif key == "coords":
+                    res = await commands.set_coords(*value)
+                elif key == "tx_power":
+                    res = await commands.set_tx_power(value)
+                elif key == "radio":
+                    res = await commands.set_radio(*value)
+                elif key == "pin":
+                    res = await commands.set_devicepin(value)
+                else:
+                    continue
+            except Exception as exc:  # noqa: BLE001 - one bad field shouldn't abort the rest
+                log.write(f"[bold red]Error setting {key}:[/] {exc}")
+                continue
+            if res is None or res.type == EventType.ERROR:
+                log.write(f"[bold red]Device rejected {key}[/]")
+            else:
+                applied.append(key)
+
+        if applied:
+            log.write(f"[bold green]Updated: {', '.join(applied)}[/]")
+            # Re-fetch SELF_INFO so self.mc.self_info (and self.client.self_name,
+            # which reads from it) reflect what was actually just set.
+            await commands.send_appstart()
+            self.update_status()
 
     def action_clear_pane(self) -> None:
         if self.active_key:
