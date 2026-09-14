@@ -752,6 +752,15 @@ class ChatScreen(Screen):
         self.device_id = self.mc.self_info.get("public_key") or self.client.self_name
         self.saved_chats = history_store.load(self.device_id)
 
+        # Only safe to start fetching once both handlers are subscribed and
+        # history is loaded - see start_message_fetching()'s docstring. A
+        # failure here shouldn't tear down an otherwise-working connection,
+        # so it's reported rather than left to propagate out of startup().
+        try:
+            await self.client.start_message_fetching()
+        except Exception as exc:  # noqa: BLE001
+            log.write(f"[bold red]Could not start message fetching:[/] {exc}")
+
         self.rebuild_sidebar()
         first_chan = next((k for k in self.target_order if k.startswith("chan#")), None)
         if first_chan:

@@ -89,6 +89,24 @@ class MeshCoreClient:
             raise ConnectionError(f"Could not connect to MeshCore node ({kind}: {ident})")
         await self.mc.ensure_contacts()
         await self.fetch_channels(force=True)
+        # Message fetching is deliberately NOT started here - see
+        # start_message_fetching()'s docstring for why the caller must
+        # start it explicitly, after subscribing its own message handlers.
+
+    async def start_message_fetching(self) -> None:
+        """Start auto-fetching messages (including any already waiting on
+        the device).
+
+        Call this ONLY after subscribing to CONTACT_MSG_RECV/CHANNEL_MSG_RECV
+        - meshcore's start_auto_message_fetching() ends with an immediate
+        fetch of any already-pending message as part of starting up, and
+        the event that fetch dispatches needs a subscriber already
+        registered to receive it. meshcore's event dispatcher doesn't
+        buffer or replay events for handlers that subscribe late, and the
+        device clears a message from its own queue once fetched - so a
+        message genuinely waiting at connect time is otherwise fetched,
+        dispatched to no one, and permanently lost, not just delayed.
+        """
         await self.mc.start_auto_message_fetching()
 
     async def disconnect(self) -> None:
