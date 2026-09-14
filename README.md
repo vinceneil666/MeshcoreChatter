@@ -81,7 +81,7 @@ tmux new -s mesh
 | `/clear` | Clear the current pane |
 | `/quit` | Exit |
 
-Outgoing channel messages are automatically prefixed with your node's advertised name (`Name: message`), since MeshCore's group-channel protocol doesn't carry sender identity itself - this is what lets other MeshCore users tell who's talking in a channel.
+Outgoing channel messages go out as just the message text - MeshCore's group-channel protocol carries no sender identity of its own, so there's no way for recipients to attribute a channel message to you. Your own pane still shows your name next to what you send, but that's local display only, not part of the broadcast.
 
 ## How history persistence works
 
