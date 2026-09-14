@@ -373,6 +373,7 @@ class ChatScreen(Screen):
         self.corescope: CoreScopeClient | None = None
         if corescope_url:
             self.corescope = CoreScopeClient(corescope_url)
+        self.corescope_view: str = "repeaters"  # "repeaters" or "paths"
         self.reply_target: dict | None = None
 
     # ------------------------------------------------------------------ UI
@@ -541,22 +542,9 @@ class ChatScreen(Screen):
             panel.update("[dim]CoreScope: live analytics only cover channels, not direct messages[/]")
             return
 
+        limit = 4 if self.corescope_view == "paths" else 5
         try:
-            msgs = await self.corescope.channel_messages(t.label, limit=5)
-
-            prefixes: list[str] = []
-            seen: set[str] = set()
-            for m in msgs:
-                try:
-                    path = await self.corescope.packet_path(m["packetId"])
-                except Exception:
-                    continue  # a single expired/missing packet shouldn't blank the whole panel
-                for p in path:
-                    if p not in seen:
-                        seen.add(p)
-                        prefixes.append(p)
-
-            names = await self.corescope.resolve_hops(prefixes) if prefixes else {}
+            msgs = await self.corescope.channel_messages(t.label, limit=limit)
         except Exception as exc:  # noqa: BLE001 - network/server errors shouldn't crash the UI
             panel.update(f"[bold red]CoreScope error:[/] {exc}")
             return
@@ -565,7 +553,33 @@ class ChatScreen(Screen):
             panel.update(f"[dim]CoreScope ({self.corescope.base_url}): no data yet for '{t.label}'[/]")
             return
 
-        lines = [f"[bold]CoreScope - repeaters relaying {t.label}[/]  ({self.corescope.base_url})"]
+        try:
+            if self.corescope_view == "paths":
+                text = await self._render_paths_view(t.label, msgs)
+            else:
+                text = await self._render_repeaters_view(t.label, msgs)
+        except Exception as exc:  # noqa: BLE001
+            panel.update(f"[bold red]CoreScope error:[/] {exc}")
+            return
+        panel.update(text)
+
+    async def _render_repeaters_view(self, chan_label: str, msgs: list[dict]) -> str:
+        """Deduplicated list of the repeaters that relayed the given messages."""
+        prefixes: list[str] = []
+        seen: set[str] = set()
+        for m in msgs:
+            try:
+                path = await self.corescope.packet_path(m["packetId"])
+            except Exception:
+                continue  # a single expired/missing packet shouldn't blank the whole panel
+            for p in path:
+                if p not in seen:
+                    seen.add(p)
+                    prefixes.append(p)
+
+        names = await self.corescope.resolve_hops(prefixes) if prefixes else {}
+
+        lines = [f"[bold]CoreScope - repeaters relaying {chan_label}[/]  ({self.corescope.base_url})"]
         if not prefixes:
             lines.append("  (no repeaters in the last few messages - all heard direct)")
         else:
@@ -574,10 +588,37 @@ class ChatScreen(Screen):
                 lines.append(f"  - {names.get(p, p)}")
             if extra:
                 lines.append(f"  ...and {extra} more")
-        panel.update("\n".join(lines))
+        return "\n".join(lines)
+
+    async def _render_paths_view(self, chan_label: str, msgs: list[dict]) -> str:
+        """Last few messages, each followed by the raw hop path its packet took,
+        e.g.  "God morgen!"  ->  4DFF5A -> B13244
+        """
+        lines = [f"[bold]CoreScope - message paths for {chan_label}[/]  ({self.corescope.base_url})"]
+        for m in msgs[:4]:
+            snippet = (m.get("text") or "").replace("\n", " ").strip()
+            if len(snippet) > 30:
+                snippet = snippet[:29] + "…"
+            try:
+                path = await self.corescope.packet_path(m["packetId"])
+            except Exception:
+                path = []
+            path_str = " -> ".join(path) if path else "(direct, no repeaters)"
+            lines.append(f'  "{snippet}"  ->  {path_str}')
+        return "\n".join(lines)
 
     async def set_corescope(self, arg: str) -> None:
         log = self.query_one("#chatlog", RichLog)
+        if arg.lower().startswith("view"):
+            mode = arg.split(maxsplit=1)[1].strip().lower() if " " in arg else ""
+            if mode not in ("repeaters", "paths"):
+                log.write("[bold red]Usage: /corescope view <repeaters|paths>[/]")
+                return
+            self.corescope_view = mode
+            log.write(f"[dim]CoreScope view set to '{mode}'[/]")
+            self.trigger_corescope_refresh()
+            return
+
         if self.corescope is not None:
             await self.corescope.aclose()
             self.corescope = None
@@ -910,6 +951,7 @@ class ChatScreen(Screen):
             "  /importcontact meshcore://<hex>   import a contact someone shared with you\n"
             "  /mycard [name]   get a shareable meshcore:// card (yours, or a known contact's)\n"
             "  /corescope <url|off>   set/disable the live analytics server\n"
+            "  /corescope view <repeaters|paths>   switch the analytics panel view\n"
             "  /reply           pick a recent message to reply to (click or arrow+Enter)\n"
             "  /contacts        refresh contact list\n"
             "  /channels        refresh channel list\n"
