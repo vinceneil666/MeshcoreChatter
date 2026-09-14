@@ -74,6 +74,7 @@ tmux new -s mesh
 | `/importcontact meshcore://<hex>` | Import a contact from a card someone shared with you |
 | `/mycard [name]` | Get a shareable `meshcore://` card - your own node's, or a known contact's, to hand to someone else for `/importcontact` |
 | `/corescope <url\|off>` | Set or disable the live CoreScope analytics server |
+| `/corescope view <repeaters\|paths>` | Switch the analytics panel between the repeater list and the per-message hop-path view |
 | `/reply` | Open a picker to choose a recent message to reply to |
 | `/contacts` | Refresh the contact list from the device |
 | `/channels` | Refresh the channel list from the device |
@@ -91,6 +92,8 @@ Message history lives in `~/.meshcore-chat/history/<node-public-key>.json`, one 
 [CoreScope](https://github.com/Kpa-clawbot/CoreScope) is a separate, community-run MeshCore packet analyzer with a public REST API (no auth required by default). For the last few messages in the active channel, this app fetches each packet's real recorded hop path (`GET /api/packets/{id}`) and resolves those hash prefixes to repeater names (`GET /api/resolve-hops`), then shows a simple deduplicated list of the repeaters actually involved - not just who happened to observe the packet.
 
 Predefined servers are read from `corescope_servers.txt` (one `Name = https://host` per line, `#` for comments) and offered in the startup picker alongside a free-text URL field and a skip option. Change or disable it later at any time with `/corescope <url>` / `/corescope off`. It only covers channels (group broadcasts) - direct messages are point-to-point encrypted and aren't visible to a passive analyzer, so the panel shows a placeholder for those.
+
+By default the panel shows the deduplicated repeater-list view above. Switch to `/corescope view paths` for a per-message view instead: the last 4 messages in the active channel, each with a shortened text snippet followed by the raw hop path its packet took (e.g. `"Hei"  ->  4DFF5A -> B13244`) - useful for seeing which specific route each message actually traveled, rather than just the pooled set of repeaters involved. `/corescope view repeaters` switches back.
 
 ## Replying to a message
 
