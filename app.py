@@ -821,18 +821,25 @@ class ChatScreen(Screen):
             return
         await self.send_to_active(text)
 
+    _MENTION_RE = re.compile(r"^@\[([^\[\]]{1,32})\]\s*")
+
     @staticmethod
     def _infer_reply_name(record: dict) -> str | None:
         """Best-effort sender name for a reply. MeshCore's channel protocol
         carries no sender field of its own, so a received channel message
-        always has record["sender"] = None structurally - fall back to the
-        "Name: message" convention most MeshCore clients use to bake
+        always has record["sender"] = None structurally - fall back to
+        whichever naming convention the sender's own client used to bake
         identity directly into the text, so replies to channel messages
-        still show who they're aimed at."""
+        still show who they're aimed at: either the "@[Name] message"
+        mention style also used natively on this mesh (see _reply_prefix),
+        or the plainer "Name: message" style."""
         who = record.get("sender")
         if who:
             return who
         text = record.get("text") or ""
+        m = ChatScreen._MENTION_RE.match(text)
+        if m:
+            return m.group(1).strip()
         if ": " in text:
             prefix, _, rest = text.partition(": ")
             prefix = prefix.strip()
@@ -844,7 +851,7 @@ class ChatScreen(Screen):
         if not self.reply_target:
             return ""
         who = self._infer_reply_name(self.reply_target)
-        return f"@{who} | " if who else ""
+        return f"@[{who}] " if who else ""
 
     async def send_to_active(self, text: str) -> None:
         t = self.targets[self.active_key]

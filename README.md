@@ -100,7 +100,7 @@ CoreScope's own remote observer(s) can hear channel traffic your node never did,
 
 ## Replying to a message
 
-MeshCore's own protocol has no concept of threaded replies - there's no message-ID field to point back to. `ctrl+r` opens a picker over your recent messages in the current chat (click a row, or arrow-key + Enter); once picked, your next message is sent with just the original sender's name prepended (`@Sender | your reply`) - no quoted excerpt of their message, only who you're replying to. If the original message has no identifiable sender (e.g. a channel message from a client that doesn't embed a name), no prefix is added at all. Only messages sent or received during the current session are pickable (reply targets aren't persisted across restarts). `Esc` cancels a pending reply.
+MeshCore's own protocol has no concept of threaded replies - there's no message-ID field to point back to. `ctrl+r` opens a picker over your recent messages in the current chat (click a row, or arrow-key + Enter); once picked, your next message is sent with just the original sender's name prepended, using the `@[Name] message` mention style already used natively by other clients on the mesh - no quoted excerpt of the original message, only who you're replying to. If the original message has no identifiable sender, name inference falls back to whatever convention the sender's own client used to bake identity into the text - either that same `@[Name] message` style, or the plainer `Name: message` style - and if neither is present (e.g. a bare "ping"), no prefix is added at all. Only messages sent or received during the current session are pickable (reply targets aren't persisted across restarts). `Esc` cancels a pending reply.
 
 ## Adding contacts
 
