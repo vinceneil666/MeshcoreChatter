@@ -15,6 +15,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -593,6 +594,24 @@ class ChatScreen(Screen):
 
     _RICH_TAG_RE = re.compile(r"\[[^\[\]]*\]")
 
+    # Multi-hop mesh delivery isn't instant - a message CoreScope's remote
+    # observer heard (possibly via a shorter/faster path) can still be
+    # in-flight to our own node. Anything younger than this is "still
+    # verifying" rather than asserted as unreceived.
+    PATHS_VIEW_GRACE_SECONDS = 20
+
+    def _message_age_seconds(self, m: dict) -> float:
+        """Seconds since CoreScope first saw this packet. Missing/unparseable
+        timestamps are treated as infinitely old (never held back by grace)."""
+        ts = m.get("first_seen") or m.get("timestamp")
+        if not ts:
+            return float("inf")
+        try:
+            seen = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            return float("inf")
+        return (datetime.now(timezone.utc) - seen).total_seconds()
+
     def _received_locally(self, t: Target, wire_text: str) -> bool:
         """Whether the given raw on-air packet text matches something this
         client's own companion node actually saw for this channel - CoreScope
@@ -624,7 +643,12 @@ class ChatScreen(Screen):
             except Exception:
                 path = []
             path_str = " -> ".join(path) if path else "(direct, no repeaters)"
-            flag = "" if self._received_locally(t, wire_text) else "  [dim red](not received locally)[/]"
+            if self._received_locally(t, wire_text):
+                flag = ""
+            elif self._message_age_seconds(m) < self.PATHS_VIEW_GRACE_SECONDS:
+                flag = "  [dim](verifying...)[/]"
+            else:
+                flag = "  [dim red](not received locally)[/]"
             lines.append(f'  "{snippet}"  ->  {path_str}{flag}')
         return "\n".join(lines)
 
