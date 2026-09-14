@@ -19,22 +19,42 @@ def _path_for(device_id: str) -> Path:
     return HISTORY_DIR / f"{safe}.json"
 
 
-def load(device_id: str) -> dict[str, list[str]]:
+def load(device_id: str) -> dict[str, dict]:
+    """Returns {key: {"history": [display lines], "records": [{"sender",
+    "text", "sender_timestamp"}, ...]}}. Tolerates the pre-records format
+    (a plain list of display lines per key) from before message records
+    were persisted - those keys come back with an empty "records" list."""
     path = _path_for(device_id)
     if not path.exists():
         return {}
     try:
         data = json.loads(path.read_text())
-        if isinstance(data, dict):
-            return data
     except (OSError, json.JSONDecodeError):
-        pass
-    return {}
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    result: dict[str, dict] = {}
+    for key, value in data.items():
+        if isinstance(value, list):
+            result[key] = {"history": value, "records": []}
+        elif isinstance(value, dict):
+            result[key] = {
+                "history": value.get("history") or [],
+                "records": value.get("records") or [],
+            }
+    return result
 
 
-def save(device_id: str, history: dict[str, list[str]]) -> None:
+def save(device_id: str, chats: dict[str, dict]) -> None:
     path = _path_for(device_id)
-    trimmed = {key: lines[-MAX_MESSAGES:] for key, lines in history.items() if lines}
+    trimmed = {
+        key: {
+            "history": chat.get("history", [])[-MAX_MESSAGES:],
+            "records": chat.get("records", [])[-MAX_MESSAGES:],
+        }
+        for key, chat in chats.items()
+        if chat.get("history") or chat.get("records")
+    }
     try:
         path.write_text(json.dumps(trimmed))
     except OSError:

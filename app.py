@@ -409,7 +409,7 @@ class ChatScreen(Screen):
         self.active_key: str | None = None
         self.list_item_by_key: dict[str, ListItem] = {}
         self.device_id: str | None = None
-        self.saved_history: dict[str, list[str]] = {}
+        self.saved_chats: dict[str, dict] = {}  # {key: {"history": [...], "records": [...]}}
         self.corescope: CoreScopeClient | None = None
         if corescope_url:
             self.corescope = CoreScopeClient(corescope_url)
@@ -455,7 +455,7 @@ class ChatScreen(Screen):
         self.mc.subscribe(EventType.CHANNEL_MSG_RECV, self.on_channel_msg)
 
         self.device_id = self.mc.self_info.get("public_key") or self.client.self_name
-        self.saved_history = history_store.load(self.device_id)
+        self.saved_chats = history_store.load(self.device_id)
 
         self.rebuild_sidebar()
         first_chan = next((k for k in self.target_order if k.startswith("chan#")), None)
@@ -479,9 +479,11 @@ class ChatScreen(Screen):
             key = f"chan#{ch['channel_idx']}"
             label = ch["channel_name"] or f"channel {ch['channel_idx']}"
             if key not in self.targets:
+                saved = self.saved_chats.get(key, {})
                 self.targets[key] = Target(
                     key=key, kind="chan", label=label, dst=ch["channel_idx"],
-                    history=list(self.saved_history.get(key, [])),
+                    history=list(saved.get("history", [])),
+                    records=list(saved.get("records", [])),
                 )
             else:
                 self.targets[key].label = label
@@ -490,9 +492,11 @@ class ChatScreen(Screen):
         for contact in self.client.contact_list():
             key = f"dm#{contact['public_key'][:12]}"
             if key not in self.targets:
+                saved = self.saved_chats.get(key, {})
                 self.targets[key] = Target(
                     key=key, kind="dm", label=contact["adv_name"], dst=contact,
-                    history=list(self.saved_history.get(key, [])),
+                    history=list(saved.get("history", [])),
+                    records=list(saved.get("records", [])),
                 )
             else:
                 self.targets[key].dst = contact
@@ -630,7 +634,13 @@ class ChatScreen(Screen):
                 lines.append(f"  ...and {extra} more")
         return "\n".join(lines)
 
-    _RICH_TAG_RE = re.compile(r"\[[^\[\]]*\]")
+    # Exact whitelist of the Rich markup tags this app ever emits into a chat
+    # display line (see the f-strings in on_contact_msg/on_channel_msg/
+    # send_to_active). A generic "\[[^\[\]]*\]" pattern is NOT safe here -
+    # real MeshCore traffic on this mesh commonly uses a literal "@[Name]"
+    # mention convention, which a generic bracket-stripper would mangle,
+    # breaking the substring match for a message that WAS received.
+    _RICH_TAG_RE = re.compile(r"\[(?:dim|/|bold cyan|bold green)\]")
 
     # Multi-hop mesh delivery isn't instant - a message CoreScope's remote
     # observer heard (possibly via a shorter/faster path) can still be
@@ -731,9 +741,11 @@ class ChatScreen(Screen):
     def _append(self, key: str, line: str, record: dict | None = None) -> None:
         if key not in self.targets:
             # message from a contact/channel not yet in the sidebar
+            saved = self.saved_chats.get(key, {})
             self.targets[key] = Target(
                 key=key, kind="dm", label=key.split("#", 1)[1], dst=key.split("#", 1)[1],
-                history=list(self.saved_history.get(key, [])),
+                history=list(saved.get("history", [])),
+                records=list(saved.get("records", [])),
             )
             self.target_order.append(key)
             list_view = self.query_one("#target_list", ListView)
@@ -759,11 +771,14 @@ class ChatScreen(Screen):
     def persist_history(self) -> None:
         if not self.device_id:
             return
-        merged = dict(self.saved_history)
+        merged = dict(self.saved_chats)
         for key, t in self.targets.items():
-            if t.history:
-                merged[key] = t.history[-history_store.MAX_MESSAGES:]
-        self.saved_history = merged
+            if t.history or t.records:
+                merged[key] = {
+                    "history": t.history[-history_store.MAX_MESSAGES:],
+                    "records": t.records[-history_store.MAX_MESSAGES:],
+                }
+        self.saved_chats = merged
         history_store.save(self.device_id, merged)
 
     async def on_contact_msg(self, event) -> None:
@@ -948,7 +963,7 @@ class ChatScreen(Screen):
         item = self.list_item_by_key.pop(key, None)
         if item is not None:
             item.remove()
-        self.saved_history.pop(key, None)
+        self.saved_chats.pop(key, None)
         self.persist_history()
         log.write(f"[bold green]Deleted channel '{t.label}'[/]")
 
