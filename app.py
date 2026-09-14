@@ -23,6 +23,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, Checkbox, Header, Footer, Input, Label, ListItem, ListView, RichLog, Static
+from rich.markup import escape as mkescape
 
 from mc_client import MeshCoreClient
 from meshcore import EventType
@@ -134,7 +135,9 @@ class DevicePickerScreen(Screen):
             devices = await BleakScanner.discover(timeout=4.0)
             for d in devices:
                 if d.name and d.name.startswith("MeshCore-"):
-                    choices.append(("ble", d.address, f"BLE   {d.name}  ({d.address})"))
+                    # d.name is the remote BLE device's own advertised name -
+                    # escape before it hits the markup-parsing picker Label.
+                    choices.append(("ble", d.address, f"BLE   {mkescape(d.name)}  ({d.address})"))
         except Exception:
             pass  # no BLE adapter / bleak unavailable - just skip BLE devices
 
@@ -278,8 +281,10 @@ class ReplyPickerScreen(Screen):
     def on_mount(self) -> None:
         list_view = self.query_one("#reply_list", ListView)
         for rec in reversed(self.records[-20:]):
-            sender = rec.get("sender")
-            text = (rec.get("text") or "").replace("\n", " ")[:70]
+            # sender/text are mesh-sourced (contact adv_name / message text) -
+            # escape before rendering into this markup-parsing Label.
+            sender = mkescape(rec.get("sender")) if rec.get("sender") else None
+            text = mkescape((rec.get("text") or "").replace("\n", " ")[:70])
             label = f"{sender}: {text}" if sender else text
             item = ListItem(Label(label))
             item.reply_record = rec
@@ -598,7 +603,9 @@ class RepeaterListScreen(Screen):
             return
         now = time.time()
         for c in self.repeaters:
-            name = c.get("adv_name") or c.get("public_key", "?")[:12]
+            # adv_name is remote-controlled (the repeater's own advertised
+            # name) - escape before rendering into this markup-parsing Label.
+            name = mkescape(c.get("adv_name") or c.get("public_key", "?")[:12])
             last = c.get("last_advert") or 0
             ago = _format_ago(now - last) if last else "never"
             list_view.append(ListItem(Label(f"{name}   last heard {ago}")))
@@ -799,7 +806,9 @@ class ChatScreen(Screen):
     def _make_list_item(self, key: str) -> ListItem:
         t = self.targets[key]
         icon = "Chan: " if t.kind == "chan" else "@ "
-        label = Label(f"{icon}{t.label}")
+        # t.label is a contact's adv_name for DM targets - remote-controlled,
+        # escape before it hits this markup-parsing Label.
+        label = Label(f"{icon}{mkescape(t.label)}")
         item = ListItem(label)
         item.target_key = key
         item.label_widget = label
@@ -815,7 +824,7 @@ class ChatScreen(Screen):
             return
         t = self.targets[key]
         icon = "Chan: " if t.kind == "chan" else "@ "
-        text = f"{icon}{t.label}" + (f"  ({t.unread})" if t.unread else "")
+        text = f"{icon}{mkescape(t.label)}" + (f"  ({t.unread})" if t.unread else "")
         item.label_widget.update(text)
         item.set_class(key == self.active_key, "-active")
         item.set_class(bool(t.unread), "-unread")
@@ -825,7 +834,7 @@ class ChatScreen(Screen):
         if self.active_key and self.active_key in self.targets:
             t = self.targets[self.active_key]
             kind = "channel" if t.kind == "chan" else "direct message"
-            bar.update(f"[b]{self.client.self_name}[/]  |  {kind}: [b]{t.label}[/]  |  ctrl+up/down: switch  |  /help: commands  |  F2: info  |  F3: settings")
+            bar.update(f"[b]{self.client.self_name}[/]  |  {kind}: [b]{mkescape(t.label)}[/]  |  ctrl+up/down: switch  |  /help: commands  |  F2: info  |  F3: settings")
         else:
             bar.update(f"[b]{self.client.self_name}[/]  |  no chat selected  |  F2: info  |  F3: settings")
 
@@ -917,7 +926,9 @@ class ChatScreen(Screen):
         else:
             shown, extra = prefixes[:6], max(0, len(prefixes) - 6)
             for p in shown:
-                lines.append(f"  - {names.get(p, p)}")
+                # resolved repeater names reflect mesh-advertised names -
+                # remote-controlled, escape before rendering.
+                lines.append(f"  - {mkescape(names.get(p, p))}")
             if extra:
                 lines.append(f"  ...and {extra} more")
         return "\n".join(lines)
@@ -999,7 +1010,10 @@ class ChatScreen(Screen):
                 flag = "  [dim](verifying...)[/]"
             else:
                 flag = "  [dim red](not received locally)[/]"
-            lines.append(f'  "{snippet}"  ->  {path_str}{flag}')
+            # snippet is real mesh message text (via CoreScope) - escape only
+            # for display; the unescaped wire_text above is what actually
+            # needs to match against local history for _received_locally().
+            lines.append(f'  "{mkescape(snippet)}"  ->  {path_str}{flag}')
         return "\n".join(lines)
 
     async def set_corescope(self, arg: str) -> None:
@@ -1076,7 +1090,12 @@ class ChatScreen(Screen):
         key = f"dm#{(contact['public_key'][:12] if contact else data['pubkey_prefix'])}"
         ts = time.strftime("%H:%M:%S")
         text = data["text"]
-        self._append(key, f"[dim]{ts}[/] [bold cyan]{name}[/]: {text}", {"sender": name, "text": text})
+        # name/text come straight off the mesh - escape before they hit a
+        # markup-parsing widget (an unmatched closing tag like "[/bold]"
+        # otherwise raises MarkupError uncaught, and a crafted name/message
+        # can spoof app styling). Keep the RAW text in the stored record so
+        # persisted history isn't double-escaped on reload.
+        self._append(key, f"[dim]{ts}[/] [bold cyan]{mkescape(name)}[/]: {mkescape(text)}", {"sender": name, "text": text})
 
     async def on_channel_msg(self, event) -> None:
         data = event.payload
@@ -1091,7 +1110,12 @@ class ChatScreen(Screen):
         # sender_timestamp is the epoch second the original sender embedded
         # in the packet - kept so the CoreScope paths view can match this
         # exact message against what CoreScope itself reports for it.
-        self._append(key, f"[dim]{ts}[/] {text}",
+        # text comes straight off the mesh - escape before it hits a
+        # markup-parsing widget (see on_contact_msg for why). Keep the RAW
+        # text in the stored record: _infer_reply_name() and the persisted
+        # history both need the real "@[Name] ..."/"Name: ..." text, and
+        # persisted history shouldn't get double-escaped on reload.
+        self._append(key, f"[dim]{ts}[/] {mkescape(text)}",
                       {"sender": None, "text": text, "sender_timestamp": data.get("sender_timestamp")})
 
     # --------------------------------------------------------------- send
@@ -1150,15 +1174,19 @@ class ChatScreen(Screen):
         self.reply_target = None
         self.update_reply_banner()
 
+        # text may embed a reply-target name inferred from remote/mesh data
+        # (_reply_prefix() -> "@[Name] ") - escape only for the local display
+        # line. text itself stays raw for what's actually sent over the mesh
+        # and for the stored record (a re-reply later needs the real text).
         if t.kind == "chan":
             sender_ts = int(time.time())
-            line = f"[dim]{ts}[/] [bold green]{self.client.self_name}[/]: {text}"
+            line = f"[dim]{ts}[/] [bold green]{self.client.self_name}[/]: {mkescape(text)}"
             self._append(t.key, line, {"sender": self.client.self_name, "text": text, "sender_timestamp": sender_ts})
             res = await self.client.send_channel(t.dst, text, timestamp=sender_ts)
             if res is None or res.type == EventType.ERROR:
                 log.write("[bold red]  ^ failed to send[/]")
         else:
-            line = f"[dim]{ts}[/] [bold green]{self.client.self_name}[/]: {text}"
+            line = f"[dim]{ts}[/] [bold green]{self.client.self_name}[/]: {mkescape(text)}"
             self._append(t.key, line, {"sender": self.client.self_name, "text": text})
             ok = await self.client.send_dm(t.dst, text)
             if not ok:
@@ -1356,7 +1384,9 @@ class ChatScreen(Screen):
         if uri is None:
             log.write("[bold red]Could not export contact card[/]")
             return
-        log.write(f"[bold]{label} card (share this for others to /importcontact):[/]\n{uri}")
+        # label may be a contact's adv_name (remote-controlled) - escape
+        # before rendering; uri is hex-only, never needs it.
+        log.write(f"[bold]{mkescape(label)} card (share this for others to /importcontact):[/]\n{uri}")
 
     def open_dm(self, arg: str) -> None:
         if not arg:
@@ -1522,7 +1552,9 @@ class ChatScreen(Screen):
         banner = self.query_one("#reply_banner", Static)
         if self.reply_target:
             who = self._infer_reply_name(self.reply_target)
-            label = f"Replying to {who}" if who else "Replying"
+            # who is mesh-sourced (contact name or inferred from message
+            # text) - escape before rendering into this markup-parsing Static.
+            label = f"Replying to {mkescape(who)}" if who else "Replying"
             banner.update(f"[b]{label}[/]  (Esc to cancel)")
             banner.display = True
         else:
