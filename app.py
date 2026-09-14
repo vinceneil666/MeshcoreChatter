@@ -824,12 +824,8 @@ class ChatScreen(Screen):
     def _reply_prefix(self) -> str:
         if not self.reply_target:
             return ""
-        rec = self.reply_target
-        snippet = (rec.get("text") or "").replace("\n", " ").strip()
-        if len(snippet) > 24:
-            snippet = snippet[:24] + "…"
-        who = rec.get("sender")
-        return f'↩{who}: "{snippet}" | ' if who else f'↩"{snippet}" | '
+        who = self.reply_target.get("sender")
+        return f"↩{who} | " if who else ""
 
     async def send_to_active(self, text: str) -> None:
         t = self.targets[self.active_key]
@@ -1115,10 +1111,9 @@ class ChatScreen(Screen):
     def update_reply_banner(self) -> None:
         banner = self.query_one("#reply_banner", Static)
         if self.reply_target:
-            snippet = (self.reply_target.get("text") or "").replace("\n", " ")[:50]
             who = self.reply_target.get("sender")
-            prefix = f"{who}: " if who else ""
-            banner.update(f"[b]Replying to[/] {prefix}\"{snippet}\"  (Esc to cancel)")
+            label = f"Replying to {who}" if who else "Replying"
+            banner.update(f"[b]{label}[/]  (Esc to cancel)")
             banner.display = True
         else:
             banner.display = False
