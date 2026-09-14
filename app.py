@@ -22,7 +22,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Header, Footer, Input, Label, ListItem, ListView, RichLog, Static
+from textual.widgets import Button, Checkbox, Header, Footer, Input, Label, ListItem, ListView, RichLog, Static
 
 from mc_client import MeshCoreClient
 from meshcore import EventType
@@ -331,6 +331,291 @@ class InfoScreen(Screen):
         self.dismiss()
 
 
+# ------------------------------------------------------------ node settings
+
+# autoadd_config bits (examples/companion_radio/MyMesh.cpp in meshcore-dev/MeshCore) -
+# only touched when manual_add_contacts gates auto-add by type; verified against
+# firmware source rather than guessed, since getting this wrong silently changes
+# what the device does with unknown adverts.
+AUTO_ADD_OVERWRITE_OLDEST = 1 << 0
+AUTO_ADD_CHAT = 1 << 1
+AUTO_ADD_REPEATER = 1 << 2
+AUTO_ADD_ROOM_SERVER = 1 << 3
+AUTO_ADD_SENSOR = 1 << 4
+
+
+class CheckmarkCheckbox(Checkbox):
+    """Textual's Checkbox always uses the literal glyph "X" for its inner
+    mark (BUTTON_INNER), regardless of on/off - only the color changes
+    (dim when off, $text-success green when on). That reads as an error
+    mark when checked. This swaps the glyph to a checkmark when checked,
+    keeping the X for unchecked, without touching the color scheme."""
+
+    def watch_value(self) -> None:
+        self.BUTTON_INNER = "✓" if self.value else "X"
+        super().watch_value()
+
+
+class NodeSettingsScreen(Screen):
+    """Edit a subset of the connected node's own companion-protocol
+    settings: name, location, TX power, radio params, device PIN, and
+    whether contacts/repeaters get auto-added from adverts heard on the
+    mesh.
+
+    Deliberately excludes anything destructive or sensitive (factory
+    reset, private key export/import) - those need stronger safeguards
+    than a plain settings form and aren't exposed here.
+
+    Current values come from the SELF_INFO snapshot captured at connect
+    time (`self.mc.self_info`) plus a fresh GET_AUTOADD_CONFIG query (that
+    one isn't part of SELF_INFO). The companion protocol has no getter
+    for the device PIN itself, so that field always starts blank; leaving
+    it blank leaves the PIN unchanged.
+
+    Auto-add semantics (from the firmware): manual_add_contacts's bit 0
+    is a master switch - 0 means auto-add EVERYTHING regardless of type,
+    1 means gate by type using the autoadd_config bitmask. So checking
+    "auto-add contacts" / "auto-add repeaters" here may need to flip
+    manual_add_contacts into gated mode as a side effect if it was
+    previously "auto-add everything" and the user just unchecked one of
+    the two - see _save()."""
+
+    CSS = """
+    NodeSettingsScreen {
+        align: center middle;
+    }
+    #settings_box {
+        width: 64;
+        height: auto;
+        border: heavy $accent;
+        padding: 1 2;
+    }
+    #settings_box Label {
+        margin-top: 1;
+        color: $text-muted;
+    }
+    #settings_box Checkbox {
+        margin-top: 1;
+    }
+    #settings_status {
+        margin-top: 1;
+        color: $text-muted;
+    }
+    #settings_buttons {
+        margin-top: 1;
+        height: auto;
+        align-horizontal: right;
+    }
+    #settings_buttons Button {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, self_info: dict, autoadd_config: int = 0, autoadd_max_hops: int = 0):
+        super().__init__()
+        self.self_info = self_info
+        self.autoadd_config = autoadd_config
+        self.autoadd_max_hops = autoadd_max_hops
+
+    def _effective_autoadd(self, bit: int) -> bool:
+        """Whether this contact type is currently auto-added in practice -
+        either the master switch is off (auto-add everything), or it's on
+        and this specific type's bit is set."""
+        if not self.self_info.get("manual_add_contacts"):
+            return True
+        return bool(self.autoadd_config & bit)
+
+    def compose(self) -> ComposeResult:
+        info = self.self_info
+        with Vertical(id="settings_box"):
+            yield Static("[bold]Node Settings[/]")
+            yield Label("Name")
+            yield Input(value=str(info.get("name", "")), id="set_name")
+            yield Label("Location (lat, lon)")
+            yield Input(value=f"{info.get('adv_lat', 0)}, {info.get('adv_lon', 0)}", id="set_coords")
+            yield Label(f"TX power, dBm (max {info.get('max_tx_power', '?')})")
+            yield Input(value=str(info.get("tx_power", "")), id="set_txpower")
+            yield Label("Radio: freq, bw, sf, cr")
+            yield Input(
+                value=f"{info.get('radio_freq', '')}, {info.get('radio_bw', '')}, "
+                      f"{info.get('radio_sf', '')}, {info.get('radio_cr', '')}",
+                id="set_radio",
+            )
+            yield Label("Device PIN (leave blank to keep unchanged)")
+            yield Input(password=True, id="set_pin")
+            yield CheckmarkCheckbox("Auto-add contacts from adverts", value=self._effective_autoadd(AUTO_ADD_CHAT), id="set_autoadd_chat")
+            yield CheckmarkCheckbox("Auto-add repeaters from adverts", value=self._effective_autoadd(AUTO_ADD_REPEATER), id="set_autoadd_repeater")
+            yield Static("", id="settings_status")
+            with Horizontal(id="settings_buttons"):
+                yield Button("Cancel", id="btn_cancel")
+                yield Button("Save", id="btn_save", variant="primary")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn_save":
+            self._save()
+
+    def _save(self) -> None:
+        status = self.query_one("#settings_status", Static)
+        info = self.self_info
+        changes: dict = {}
+
+        name = self.query_one("#set_name", Input).value.strip()
+        if name and name != info.get("name", ""):
+            changes["name"] = name
+
+        coords_raw = self.query_one("#set_coords", Input).value.strip()
+        try:
+            lat_str, lon_str = coords_raw.split(",", 1)
+            lat, lon = float(lat_str), float(lon_str)
+        except ValueError:
+            status.update("[bold red]Location must be 'lat, lon' (e.g. 59.9623, 11.0421)[/]")
+            return
+        if round(lat, 6) != round(float(info.get("adv_lat", 0)), 6) or round(lon, 6) != round(float(info.get("adv_lon", 0)), 6):
+            changes["coords"] = (lat, lon)
+
+        txpower_raw = self.query_one("#set_txpower", Input).value.strip()
+        try:
+            txpower = int(txpower_raw)
+        except ValueError:
+            status.update("[bold red]TX power must be a whole number[/]")
+            return
+        if txpower != info.get("tx_power"):
+            changes["tx_power"] = txpower
+
+        radio_raw = self.query_one("#set_radio", Input).value.strip()
+        try:
+            freq_str, bw_str, sf_str, cr_str = [p.strip() for p in radio_raw.split(",")]
+            freq, bw, sf, cr = float(freq_str), float(bw_str), int(sf_str), int(cr_str)
+        except ValueError:
+            status.update("[bold red]Radio must be 'freq, bw, sf, cr' (e.g. 869.618, 62.5, 8, 8)[/]")
+            return
+        if (freq, bw, sf, cr) != (info.get("radio_freq"), info.get("radio_bw"), info.get("radio_sf"), info.get("radio_cr")):
+            changes["radio"] = (freq, bw, sf, cr)
+
+        pin_raw = self.query_one("#set_pin", Input).value.strip()
+        if pin_raw:
+            try:
+                changes["pin"] = int(pin_raw)
+            except ValueError:
+                status.update("[bold red]Device PIN must be numeric[/]")
+                return
+
+        want_chat = self.query_one("#set_autoadd_chat", Checkbox).value
+        want_repeater = self.query_one("#set_autoadd_repeater", Checkbox).value
+        if want_chat != self._effective_autoadd(AUTO_ADD_CHAT) or want_repeater != self._effective_autoadd(AUTO_ADD_REPEATER):
+            # Either checkbox changed from its effective current state -> switch
+            # into gated mode (manual_add_contacts=True) so the per-type bits
+            # actually apply, and set exactly those two bits from the
+            # checkboxes while preserving whatever the other type/overwrite
+            # bits already were.
+            new_config = self.autoadd_config & ~(AUTO_ADD_CHAT | AUTO_ADD_REPEATER)
+            if want_chat:
+                new_config |= AUTO_ADD_CHAT
+            if want_repeater:
+                new_config |= AUTO_ADD_REPEATER
+            changes["autoadd_config"] = new_config
+            if not info.get("manual_add_contacts"):
+                changes["manual_add_contacts"] = True
+
+        self.dismiss(changes)
+
+
+def _format_ago(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    return f"{hours // 24}d ago"
+
+
+# --------------------------------------------------------------- repeaters
+
+class RepeaterListScreen(Screen):
+    """List repeater-type contacts the device has already heard adverts
+    from (see mc_client.repeater_list()) - these don't show up in the
+    normal DM sidebar since you don't message a repeater. Dismisses with
+    "refresh" if the user asked to refresh, so the caller can re-fetch
+    contacts and reopen with current data, or None/"" on plain close."""
+
+    CSS = """
+    RepeaterListScreen {
+        align: center middle;
+    }
+    #repeaters_box {
+        width: 64;
+        height: 70%;
+        border: heavy $accent;
+        padding: 1 2;
+    }
+    #repeaters_list {
+        height: 1fr;
+        border: solid $accent;
+        margin-top: 1;
+    }
+    #repeaters_buttons {
+        margin-top: 1;
+        height: auto;
+        align-horizontal: right;
+    }
+    #repeaters_buttons Button {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "Close"),
+        Binding("r", "refresh", "Refresh"),
+    ]
+
+    def __init__(self, repeaters: list[dict]):
+        super().__init__()
+        self.repeaters = repeaters
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="repeaters_box"):
+            yield Static("[bold]Repeaters[/]  (r to refresh, Esc to close)")
+            yield ListView(id="repeaters_list")
+            with Horizontal(id="repeaters_buttons"):
+                yield Button("Refresh", id="btn_refresh")
+                yield Button("Close", id="btn_close")
+
+    def on_mount(self) -> None:
+        list_view = self.query_one("#repeaters_list", ListView)
+        if not self.repeaters:
+            list_view.append(ListItem(Label("No repeaters heard yet")))
+            return
+        now = time.time()
+        for c in self.repeaters:
+            name = c.get("adv_name") or c.get("public_key", "?")[:12]
+            last = c.get("last_advert") or 0
+            ago = _format_ago(now - last) if last else "never"
+            list_view.append(ListItem(Label(f"{name}   last heard {ago}")))
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def action_refresh(self) -> None:
+        self.dismiss("refresh")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_close":
+            self.dismiss(None)
+        elif event.button.id == "btn_refresh":
+            self.dismiss("refresh")
+
+
 # ------------------------------------------------------------------ chat
 
 class ChatScreen(Screen):
@@ -393,6 +678,8 @@ class ChatScreen(Screen):
         Binding("ctrl+q", "quit_app", "Quit"),
         Binding("f1", "show_help", "Help"),
         Binding("f2", "show_info", "Info"),
+        Binding("f3", "open_settings", "Settings"),
+        Binding("f4", "open_repeaters", "Repeaters"),
         Binding("ctrl+up", "prev_target", "Prev chat"),
         Binding("ctrl+down", "next_target", "Next chat"),
         Binding("ctrl+l", "clear_pane", "Clear"),
@@ -409,6 +696,7 @@ class ChatScreen(Screen):
         self.active_key: str | None = None
         self.list_item_by_key: dict[str, ListItem] = {}
         self.device_id: str | None = None
+        self.mc = None  # set to self.client.mc once startup() connects successfully
         self.saved_chats: dict[str, dict] = {}  # {key: {"history": [...], "records": [...]}}
         self.corescope: CoreScopeClient | None = None
         if corescope_url:
@@ -537,9 +825,9 @@ class ChatScreen(Screen):
         if self.active_key and self.active_key in self.targets:
             t = self.targets[self.active_key]
             kind = "channel" if t.kind == "chan" else "direct message"
-            bar.update(f"[b]{self.client.self_name}[/]  |  {kind}: [b]{t.label}[/]  |  ctrl+up/down: switch  |  /help: commands  |  F2: info")
+            bar.update(f"[b]{self.client.self_name}[/]  |  {kind}: [b]{t.label}[/]  |  ctrl+up/down: switch  |  /help: commands  |  F2: info  |  F3: settings")
         else:
-            bar.update(f"[b]{self.client.self_name}[/]  |  no chat selected  |  F2: info")
+            bar.update(f"[b]{self.client.self_name}[/]  |  no chat selected  |  F2: info  |  F3: settings")
 
     # -------------------------------------------------------------- switch
 
@@ -916,6 +1204,12 @@ class ChatScreen(Screen):
             await self.set_corescope(arg)
         elif cmd in ("reply", "r"):
             self.action_open_reply_picker()
+        elif cmd == "settings":
+            self.action_open_settings()
+        elif cmd == "repeaters":
+            self.action_open_repeaters()
+        elif cmd == "advert":
+            await self.send_advert_cmd(arg)
         elif cmd == "clear":
             self.action_clear_pane()
         else:
@@ -1092,11 +1386,14 @@ class ChatScreen(Screen):
             "  /corescope <url|off>   set/disable the live analytics server\n"
             "  /corescope view <repeaters|paths>   switch the analytics panel view\n"
             "  /reply           pick a recent message to reply to (click or arrow+Enter)\n"
+            "  /settings        edit this node's own settings (name, location, radio, etc.)\n"
+            "  /repeaters       list repeater contacts the device has heard adverts from\n"
+            "  /advert [flood]  send this node's own advertisement (flood = multi-hop)\n"
             "  /contacts        refresh contact list\n"
             "  /channels        refresh channel list\n"
             "  /clear           clear the current pane\n"
             "  /quit            exit\n"
-            "[bold]Keys:[/] ctrl+up/ctrl+down switch chats, ctrl+r reply, esc cancel reply, ctrl+l clear, ctrl+q quit"
+            "[bold]Keys:[/] ctrl+up/ctrl+down switch chats, ctrl+r reply, esc cancel reply, ctrl+l clear, ctrl+q quit, f3 settings, f4 repeaters"
         )
 
     # ------------------------------------------------------------- actions
@@ -1106,6 +1403,93 @@ class ChatScreen(Screen):
 
     def action_show_info(self) -> None:
         self.app.push_screen(InfoScreen())
+
+    def action_open_settings(self) -> None:
+        self.run_worker(self._open_settings(), exclusive=True, group="node_settings")
+
+    async def _open_settings(self) -> None:
+        log = self.query_one("#chatlog", RichLog)
+        if self.mc is None or not self.mc.self_info:
+            log.write("[dim]Not connected yet - can't read node settings[/]")
+            return
+
+        commands = self.client.mc.commands
+        autoadd_config = 0
+        autoadd_max_hops = 0
+        try:
+            autoadd_res = await commands.get_autoadd_config()
+            if autoadd_res is not None and autoadd_res.type != EventType.ERROR:
+                autoadd_config = autoadd_res.payload.get("config", 0)
+                autoadd_max_hops = autoadd_res.payload.get("max_hops", 0)
+        except Exception as exc:  # noqa: BLE001 - fall back to "no bits set" rather than blocking settings entirely
+            log.write(f"[dim]Could not read auto-add config: {exc}[/]")
+
+        changes = await self.app.push_screen_wait(
+            NodeSettingsScreen(dict(self.mc.self_info), autoadd_config, autoadd_max_hops)
+        )
+        if not changes:
+            return
+
+        applied: list[str] = []
+        for key, value in changes.items():
+            try:
+                if key == "name":
+                    res = await commands.set_name(value)
+                elif key == "coords":
+                    res = await commands.set_coords(*value)
+                elif key == "tx_power":
+                    res = await commands.set_tx_power(value)
+                elif key == "radio":
+                    res = await commands.set_radio(*value)
+                elif key == "pin":
+                    res = await commands.set_devicepin(value)
+                elif key == "manual_add_contacts":
+                    infos = dict(self.mc.self_info)
+                    infos["manual_add_contacts"] = value
+                    res = await commands.set_other_params_from_infos(infos)
+                elif key == "autoadd_config":
+                    res = await commands.set_autoadd_config(value)
+                else:
+                    continue
+            except Exception as exc:  # noqa: BLE001 - one bad field shouldn't abort the rest
+                log.write(f"[bold red]Error setting {key}:[/] {exc}")
+                continue
+            if res is None or res.type == EventType.ERROR:
+                log.write(f"[bold red]Device rejected {key}[/]")
+            else:
+                applied.append(key)
+
+        if applied:
+            log.write(f"[bold green]Updated: {', '.join(applied)}[/]")
+            # Re-fetch SELF_INFO so self.mc.self_info (and self.client.self_name,
+            # which reads from it) reflect what was actually just set.
+            await commands.send_appstart()
+            self.update_status()
+
+    def action_open_repeaters(self) -> None:
+        self.run_worker(self._open_repeaters(), exclusive=True, group="repeaters")
+
+    async def _open_repeaters(self) -> None:
+        log = self.query_one("#chatlog", RichLog)
+        if self.mc is None:
+            log.write("[dim]Not connected yet[/]")
+            return
+        await self.client.mc.commands.get_contacts()
+        result = await self.app.push_screen_wait(RepeaterListScreen(self.client.repeater_list()))
+        if result == "refresh":
+            await self._open_repeaters()
+
+    async def send_advert_cmd(self, arg: str) -> None:
+        log = self.query_one("#chatlog", RichLog)
+        if self.mc is None:
+            log.write("[dim]Not connected yet[/]")
+            return
+        flood = arg.strip().lower() == "flood"
+        res = await self.client.mc.commands.send_advert(flood=flood)
+        if res is None or res.type == EventType.ERROR:
+            log.write("[bold red]Failed to send advert[/]")
+        else:
+            log.write(f"[bold green]Sent {'flood' if flood else 'zero-hop'} advertisement[/]")
 
     def action_clear_pane(self) -> None:
         if self.active_key:
