@@ -1599,7 +1599,7 @@ class ChatScreen(Screen):
 # ------------------------------------------------------------------- app
 
 class MeshChatApp(App):
-    TITLE = "MeshCoreChatter v2.0"
+    TITLE = "MeshCoreChatter v2.0.1"
 
     def __init__(self, connection: tuple[str, str] | None = None, corescope_url: str | None = None):
         super().__init__()
