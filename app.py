@@ -821,10 +821,29 @@ class ChatScreen(Screen):
             return
         await self.send_to_active(text)
 
+    @staticmethod
+    def _infer_reply_name(record: dict) -> str | None:
+        """Best-effort sender name for a reply. MeshCore's channel protocol
+        carries no sender field of its own, so a received channel message
+        always has record["sender"] = None structurally - fall back to the
+        "Name: message" convention most MeshCore clients use to bake
+        identity directly into the text, so replies to channel messages
+        still show who they're aimed at."""
+        who = record.get("sender")
+        if who:
+            return who
+        text = record.get("text") or ""
+        if ": " in text:
+            prefix, _, rest = text.partition(": ")
+            prefix = prefix.strip()
+            if prefix and rest and len(prefix) <= 32 and "\n" not in prefix:
+                return prefix
+        return None
+
     def _reply_prefix(self) -> str:
         if not self.reply_target:
             return ""
-        who = self.reply_target.get("sender")
+        who = self._infer_reply_name(self.reply_target)
         return f"@{who} | " if who else ""
 
     async def send_to_active(self, text: str) -> None:
@@ -1111,7 +1130,7 @@ class ChatScreen(Screen):
     def update_reply_banner(self) -> None:
         banner = self.query_one("#reply_banner", Static)
         if self.reply_target:
-            who = self.reply_target.get("sender")
+            who = self._infer_reply_name(self.reply_target)
             label = f"Replying to {who}" if who else "Replying"
             banner.update(f"[b]{label}[/]  (Esc to cancel)")
             banner.display = True
