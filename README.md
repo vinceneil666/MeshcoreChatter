@@ -17,9 +17,10 @@ Connects to a MeshCore companion device (over USB serial or BLE), and gives you 
 - **Device picker on startup** - scans for BLE MeshCore devices (`MeshCore-*`) and lists all serial ports, navigate with arrow keys, `Enter` to connect.
 - **Sidebar** listing channels (`Chan: name`) and direct-message contacts (`@ name`), with unread counts.
 - **Persistent history** - the last 50 messages of every chat are remembered across restarts, keyed to the connected node's own public key (so it follows that physical device regardless of which `/dev/ttyACMx` it enumerates as, or whether you connect over USB or BLE).
-- **Slash commands**: `/join`, `/msg`, `/newchannel`, `/delchannel`, `/addcontact`, `/importcontact`, `/mycard`, `/corescope`, `/reply`, `/settings`, `/contacts`, `/channels`, `/clear`, `/quit`, `/help`.
-- **Node settings** (`f3` or `/settings`) - a form for editing the connected node's own settings directly: name, location, TX power, radio params (freq/bw/sf/cr), and the device PIN. Only fields you actually change are sent to the device.
-- **Keyboard-first**: `ctrl+up` / `ctrl+down` to switch chats, `ctrl+r` to reply, `esc` to cancel a reply, `ctrl+l` to clear the pane, `ctrl+q` to quit, `f1` for help, `f2` for app info, `f3` for node settings.
+- **Slash commands**: `/join`, `/msg`, `/newchannel`, `/delchannel`, `/addcontact`, `/importcontact`, `/mycard`, `/corescope`, `/reply`, `/settings`, `/repeaters`, `/advert`, `/contacts`, `/channels`, `/clear`, `/quit`, `/help`.
+- **Node settings** (`f3` or `/settings`) - a form for editing the connected node's own settings directly: name, location, TX power, radio params (freq/bw/sf/cr), the device PIN, and whether contacts/repeaters get auto-added from adverts. Only fields you actually change are sent to the device.
+- **Repeaters and adverts** (`f4` or `/repeaters`, `/advert`) - see which repeater-type contacts the device has heard, and send this node's own advertisement to the mesh.
+- **Keyboard-first**: `ctrl+up` / `ctrl+down` to switch chats, `ctrl+r` to reply, `esc` to cancel a reply, `ctrl+l` to clear the pane, `ctrl+q` to quit, `f1` for help, `f2` for app info, `f3` for node settings, `f4` for repeaters.
 - **Live CoreScope analytics panel** - at startup, pick a [CoreScope](https://github.com/Kpa-clawbot/CoreScope) analytics server (from a predefined list in `corescope_servers.txt`, or type your own URL, or skip). A panel at the bottom of the chat screen shows a simple, deduplicated list of the actual repeaters that relayed the last few messages in the active channel (resolved from the packet's real hop path, not just who observed it).
 - **Reply to a message** - `ctrl+r` (or `/reply`) opens a picker of recent messages in the current chat; click one, or arrow-key + Enter. Your next message goes out prefixed with just the original sender's name, and a banner shows who you're replying to until you send or cancel (`Esc`).
 - **Adding contacts** - `/addcontact` a known public key directly, `/importcontact` a card someone shared with you, or `/mycard` to get your own shareable card to hand to someone else.
@@ -73,7 +74,8 @@ tmux new -s mesh
 | `ctrl+q` | Quit |
 | `f1` | Help |
 | `f2` | App info (name, description, developer, GitHub link) |
-| `f3` | Node settings (name, location, TX power, radio, PIN) |
+| `f3` | Node settings (name, location, TX power, radio, PIN, auto-add) |
+| `f4` | Repeaters heard on the mesh (`r` to refresh) |
 
 | Command | Description |
 |---|---|
@@ -88,6 +90,8 @@ tmux new -s mesh
 | `/corescope view <repeaters\|paths>` | Switch the analytics panel between the repeater list and the per-message hop-path view |
 | `/reply` | Open a picker to choose a recent message to reply to |
 | `/settings` | Open the node settings form (same as `f3`) |
+| `/repeaters` | List repeater contacts heard on the mesh (same as `f4`) |
+| `/advert [flood]` | Send this node's own advertisement (`flood` for a multi-hop version) |
 | `/contacts` | Refresh the contact list from the device |
 | `/channels` | Refresh the channel list from the device |
 | `/clear` | Clear the current pane |
@@ -122,10 +126,17 @@ MeshCore's own protocol has no concept of threaded replies - there's no message-
 - **TX power** - in dBm (the form shows the device's own reported maximum alongside it)
 - **Radio** - `freq, bw, sf, cr` (e.g. `869.618, 62.5, 8, 8`)
 - **Device PIN** - a numeric PIN; leave blank to leave it unchanged (the companion protocol has no way to read back the current PIN, so this field never shows or pre-fills a real value)
+- **Auto-add contacts / Auto-add repeaters** - whether the node automatically adds a contact entry when it hears an advert from a chat client or a repeater, versus requiring you to add them manually. These are checked against the device's *effective* current behavior, which needs a short explanation: the firmware has a master switch (auto-add everything, regardless of type) and, when that's off, a separate per-type bitmask (chat / repeater / room-server / sensor) that decides which types still get auto-added. Toggling either checkbox here always expresses your intent precisely - if the master switch was previously "everything", unchecking just one box switches the device into per-type mode and sets the bits accordingly, preserving whatever the room-server/sensor/overwrite-oldest bits already were.
 
 Only fields you actually change are sent to the device - untouched fields aren't resent. After saving, the app re-reads the node's info so the sidebar/status bar immediately reflect anything that changed (e.g. a new name).
 
 Deliberately not included here: rebooting the device and factory reset/private-key export are supported by the underlying MeshCore companion protocol but aren't exposed through this form - they need stronger safeguards than a plain settings screen.
+
+## Repeaters and sending an advert
+
+`f4` (or `/repeaters`) refreshes the device's contact list and shows just the repeater-type contacts it's heard adverts from - these are deliberately excluded from the normal DM sidebar (you don't message a repeater), so this is the only place to see them: name and how long ago each was last heard. `r` refreshes the list in place; `Esc` or Close dismisses it.
+
+`/advert` sends this node's own advertisement packet to the mesh (a zero-hop broadcast, the same thing that makes your node discoverable/known to nearby nodes). `/advert flood` sends a flooded version that propagates multiple hops instead of just reaching direct neighbors.
 
 ## Adding contacts
 

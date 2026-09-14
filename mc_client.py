@@ -5,6 +5,13 @@ from typing import Optional
 
 from meshcore import MeshCore, EventType
 
+# Contact "type" values, per ADV_TYPE_* in meshcore-dev/MeshCore's
+# src/helpers/AdvertDataHelpers.h - verified against firmware source, not guessed.
+ADV_TYPE_CHAT = 1
+ADV_TYPE_REPEATER = 2
+ADV_TYPE_ROOM = 3
+ADV_TYPE_SENSOR = 4
+
 
 class MeshCoreClient:
     def __init__(self) -> None:
@@ -54,7 +61,17 @@ class MeshCoreClient:
         if not self.mc:
             return []
         return sorted(
-            (c for c in self.mc.contacts.values() if c.get("type") in (1, 3)),
+            (c for c in self.mc.contacts.values() if c.get("type") in (ADV_TYPE_CHAT, ADV_TYPE_ROOM)),
+            key=lambda c: c.get("adv_name", "").lower(),
+        )
+
+    def repeater_list(self) -> list[dict]:
+        """Repeater-type contacts heard on the mesh - excluded from the DM
+        sidebar (you don't message a repeater), surfaced separately."""
+        if not self.mc:
+            return []
+        return sorted(
+            (c for c in self.mc.contacts.values() if c.get("type") == ADV_TYPE_REPEATER),
             key=lambda c: c.get("adv_name", "").lower(),
         )
 
