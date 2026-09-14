@@ -1,6 +1,9 @@
 """Thin async wrapper around the meshcore library for the chat TUI."""
 from __future__ import annotations
 
+import asyncio
+import inspect
+import logging
 from typing import Optional
 
 from meshcore import MeshCore, EventType
@@ -12,6 +15,57 @@ ADV_TYPE_REPEATER = 2
 ADV_TYPE_ROOM = 3
 ADV_TYPE_SENSOR = 4
 
+logger = logging.getLogger(__name__)
+
+
+def _drop_rts_before_dtr() -> bool:
+    """Keep opening the serial port from resetting ESP32-based nodes.
+
+    meshcore's connection_made() deasserts DTR and only then RTS. The port opens
+    with both lines asserted, so on a board whose USB bridge drives the ESP32
+    auto-reset circuit (ThinkNode M2 and most ESP32-S3 designs) that first write
+    lands on DTR=0 + RTS=1 - the combination that holds EN low. The node reboots,
+    the APPSTART frame that follows goes into the boot ROM, and because the
+    library never retries it, create_serial() times out and returns None.
+
+    Dropping RTS first reaches the same end state without ever passing through
+    the reset combination. Returns False if the shim could not be applied.
+    """
+    try:
+        from meshcore.serial_cx import SerialConnection
+
+        protocol = SerialConnection.MCSerialClientProtocol
+    except (ImportError, AttributeError):
+        logger.warning("meshcore serial internals moved; ESP32 reset shim not applied")
+        return False
+
+    if getattr(protocol, "_rts_before_dtr", False):
+        return True
+
+    original = protocol.connection_made
+
+    def connection_made(self, transport):
+        port = getattr(transport, "serial", None)
+        if port is not None:
+            port.rts = False
+        return original(self, transport)
+
+    protocol.connection_made = connection_made
+    protocol._rts_before_dtr = True
+    return True
+
+
+def _serial_kwargs() -> dict:
+    kwargs = {"auto_reconnect": True}
+    # Newer meshcore releases expose the RTS state and default it to True, which
+    # would re-assert the line the shim just dropped.
+    try:
+        if "rts" in inspect.signature(MeshCore.create_serial).parameters:
+            kwargs["rts"] = False
+    except (TypeError, ValueError):
+        pass
+    return kwargs
+
 
 class MeshCoreClient:
     def __init__(self) -> None:
@@ -19,7 +73,14 @@ class MeshCoreClient:
 
     async def connect(self, kind: str, ident: str, baudrate: int = 115200) -> None:
         if kind == "serial":
-            self.mc = await MeshCore.create_serial(ident, baudrate, auto_reconnect=True)
+            _drop_rts_before_dtr()
+            kwargs = _serial_kwargs()
+            self.mc = await MeshCore.create_serial(ident, baudrate, **kwargs)
+            if self.mc is None:
+                # A node already mid-reboot when the port opened needs a moment
+                # before it can answer APPSTART.
+                await asyncio.sleep(3)
+                self.mc = await MeshCore.create_serial(ident, baudrate, **kwargs)
         elif kind == "ble":
             self.mc = await MeshCore.create_ble(address=ident, auto_reconnect=True)
         else:
