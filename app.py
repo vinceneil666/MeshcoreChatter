@@ -769,10 +769,9 @@ class ChatScreen(Screen):
         self.update_reply_banner()
 
         if t.kind == "chan":
-            full_text = f"{self.client.self_name}: {text}"
             line = f"[dim]{ts}[/] [bold green]{self.client.self_name}[/]: {text}"
             self._append(t.key, line, {"sender": self.client.self_name, "text": text})
-            res = await self.client.send_channel(t.dst, full_text)
+            res = await self.client.send_channel(t.dst, text)
             if res is None or res.type == EventType.ERROR:
                 log.write("[bold red]  ^ failed to send[/]")
         else:
