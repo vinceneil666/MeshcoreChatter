@@ -11,6 +11,7 @@ Usage:
 """
 from __future__ import annotations
 
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -555,7 +556,7 @@ class ChatScreen(Screen):
 
         try:
             if self.corescope_view == "paths":
-                text = await self._render_paths_view(t.label, msgs)
+                text = await self._render_paths_view(t, msgs)
             else:
                 text = await self._render_repeaters_view(t.label, msgs)
         except Exception as exc:  # noqa: BLE001
@@ -590,13 +591,32 @@ class ChatScreen(Screen):
                 lines.append(f"  ...and {extra} more")
         return "\n".join(lines)
 
-    async def _render_paths_view(self, chan_label: str, msgs: list[dict]) -> str:
+    _RICH_TAG_RE = re.compile(r"\[[^\[\]]*\]")
+
+    def _received_locally(self, t: Target, wire_text: str) -> bool:
+        """Whether the given raw on-air packet text matches something this
+        client's own companion node actually saw for this channel - CoreScope
+        sees everything its own remote observer(s) hear, which is not
+        necessarily the same set of packets our node received."""
+        wire_text = (wire_text or "").strip()
+        if not wire_text:
+            return False
+        for line in t.history:
+            # strip Rich markup tags (e.g. "[dim]...[/]") so the comparison is
+            # against plain text, not the formatted display line
+            if wire_text in self._RICH_TAG_RE.sub("", line):
+                return True
+        return False
+
+    async def _render_paths_view(self, t: Target, msgs: list[dict]) -> str:
         """Last few messages, each followed by the raw hop path its packet took,
         e.g.  "God morgen!"  ->  4DFF5A -> B13244
+        Messages CoreScope saw but our own node never received are flagged.
         """
-        lines = [f"[bold]CoreScope - message paths for {chan_label}[/]  ({self.corescope.base_url})"]
+        lines = [f"[bold]CoreScope - message paths for {t.label}[/]  ({self.corescope.base_url})"]
         for m in msgs[:4]:
-            snippet = (m.get("text") or "").replace("\n", " ").strip()
+            wire_text = m.get("text") or ""
+            snippet = wire_text.replace("\n", " ").strip()
             if len(snippet) > 30:
                 snippet = snippet[:29] + "…"
             try:
@@ -604,7 +624,8 @@ class ChatScreen(Screen):
             except Exception:
                 path = []
             path_str = " -> ".join(path) if path else "(direct, no repeaters)"
-            lines.append(f'  "{snippet}"  ->  {path_str}')
+            flag = "" if self._received_locally(t, wire_text) else "  [dim red](not received locally)[/]"
+            lines.append(f'  "{snippet}"  ->  {path_str}{flag}')
         return "\n".join(lines)
 
     async def set_corescope(self, arg: str) -> None:
