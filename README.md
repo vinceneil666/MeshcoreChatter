@@ -4,6 +4,10 @@ An IRC-style terminal chat client for a [MeshCore](https://github.com/meshcore-d
 
 Connects to a MeshCore companion device (over USB serial or BLE), and gives you a proper terminal UI on top of it: a channel/contact sidebar, a scrolling message pane, unread badges, and slash commands - instead of driving the mesh one line at a time.
 
+## Screenshots
+
+<img width="866" height="463" alt="image" src="https://github.com/user-attachments/assets/fabb9404-c9d0-4dd7-89f9-89b8b03ac83b" />
+
 ## Features
 
 - **Device picker on startup** - scans for BLE MeshCore devices (`MeshCore-*`) and lists all serial ports, navigate with arrow keys, `Enter` to connect.
