@@ -825,7 +825,7 @@ class ChatScreen(Screen):
         if not self.reply_target:
             return ""
         who = self.reply_target.get("sender")
-        return f"↩{who} | " if who else ""
+        return f"@{who} | " if who else ""
 
     async def send_to_active(self, text: str) -> None:
         t = self.targets[self.active_key]
