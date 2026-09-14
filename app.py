@@ -344,6 +344,18 @@ AUTO_ADD_ROOM_SERVER = 1 << 3
 AUTO_ADD_SENSOR = 1 << 4
 
 
+class CheckmarkCheckbox(Checkbox):
+    """Textual's Checkbox always uses the literal glyph "X" for its inner
+    mark (BUTTON_INNER), regardless of on/off - only the color changes
+    (dim when off, $text-success green when on). That reads as an error
+    mark when checked. This swaps the glyph to a checkmark when checked,
+    keeping the X for unchecked, without touching the color scheme."""
+
+    def watch_value(self) -> None:
+        self.BUTTON_INNER = "✓" if self.value else "X"
+        super().watch_value()
+
+
 class NodeSettingsScreen(Screen):
     """Edit a subset of the connected node's own companion-protocol
     settings: name, location, TX power, radio params, device PIN, and
@@ -433,8 +445,8 @@ class NodeSettingsScreen(Screen):
             )
             yield Label("Device PIN (leave blank to keep unchanged)")
             yield Input(password=True, id="set_pin")
-            yield Checkbox("Auto-add contacts from adverts", value=self._effective_autoadd(AUTO_ADD_CHAT), id="set_autoadd_chat")
-            yield Checkbox("Auto-add repeaters from adverts", value=self._effective_autoadd(AUTO_ADD_REPEATER), id="set_autoadd_repeater")
+            yield CheckmarkCheckbox("Auto-add contacts from adverts", value=self._effective_autoadd(AUTO_ADD_CHAT), id="set_autoadd_chat")
+            yield CheckmarkCheckbox("Auto-add repeaters from adverts", value=self._effective_autoadd(AUTO_ADD_REPEATER), id="set_autoadd_repeater")
             yield Static("", id="settings_status")
             with Horizontal(id="settings_buttons"):
                 yield Button("Cancel", id="btn_cancel")
