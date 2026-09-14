@@ -10,7 +10,7 @@ Connects to a MeshCore companion device (over USB serial or BLE), and gives you 
 - **Sidebar** listing channels (`Chan: name`) and direct-message contacts (`@ name`), with unread counts.
 - **Persistent history** - the last 50 messages of every chat are remembered across restarts, keyed to the connected node's own public key (so it follows that physical device regardless of which `/dev/ttyACMx` it enumerates as, or whether you connect over USB or BLE).
 - **Slash commands**: `/join`, `/msg`, `/newchannel`, `/delchannel`, `/addcontact`, `/importcontact`, `/mycard`, `/corescope`, `/reply`, `/contacts`, `/channels`, `/clear`, `/quit`, `/help`.
-- **Keyboard-first**: `ctrl+up` / `ctrl+down` to switch chats, `ctrl+r` to reply, `esc` to cancel a reply, `ctrl+l` to clear the pane, `ctrl+q` to quit, `f1` for help.
+- **Keyboard-first**: `ctrl+up` / `ctrl+down` to switch chats, `ctrl+r` to reply, `esc` to cancel a reply, `ctrl+l` to clear the pane, `ctrl+q` to quit, `f1` for help, `f2` for app info.
 - **Live CoreScope analytics panel** - at startup, pick a [CoreScope](https://github.com/Kpa-clawbot/CoreScope) analytics server (from a predefined list in `corescope_servers.txt`, or type your own URL, or skip). A panel at the bottom of the chat screen shows a simple, deduplicated list of the actual repeaters that relayed the last few messages in the active channel (resolved from the packet's real hop path, not just who observed it).
 - **Reply to a message** - `ctrl+r` (or `/reply`) opens a picker of recent messages in the current chat; click one, or arrow-key + Enter. Your next message goes out with a compact quote of the original prepended, and a banner shows what you're replying to until you send or cancel (`Esc`).
 - **Adding contacts** - `/addcontact` a known public key directly, `/importcontact` a card someone shared with you, or `/mycard` to get your own shareable card to hand to someone else.
@@ -63,6 +63,7 @@ tmux new -s mesh
 | `ctrl+l` | Clear the current pane |
 | `ctrl+q` | Quit |
 | `f1` | Help |
+| `f2` | App info (name, description, developer, GitHub link) |
 
 | Command | Description |
 |---|---|
