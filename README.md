@@ -44,6 +44,8 @@ python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 ```
 
+> **Debian:** if `python3 -m venv` fails, install the venv package first: `sudo apt install python3-venv`. The venv above already avoids Debian's PEP 668 system-pip restriction — no `--break-system-packages` needed.
+
 ## Run
 
 ```bash
