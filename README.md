@@ -23,6 +23,7 @@ Connects to a MeshCore companion device (over USB serial or BLE), and gives you 
 - **Keyboard-first**: `ctrl+up` / `ctrl+down` to switch chats, `ctrl+r` to reply, `esc` to cancel a reply, `ctrl+l` to clear the pane, `ctrl+q` to quit, `f1` for help, `f2` for app info, `f3` for node settings, `f4` for repeaters.
 - **Live CoreScope analytics panel** - at startup, pick a [CoreScope](https://github.com/Kpa-clawbot/CoreScope) analytics server (from a predefined list in `corescope_servers.txt`, or type your own URL, or skip). A panel at the bottom of the chat screen shows a simple, deduplicated list of the actual repeaters that relayed the last few messages in the active channel (resolved from the packet's real hop path, not just who observed it).
 - **Reply to a message** - `ctrl+r` (or `/reply`) opens a picker of recent messages in the current chat; click one, or arrow-key + Enter. Your next message goes out prefixed with just the original sender's name, and a banner shows who you're replying to until you send or cancel (`Esc`).
+- **Select and copy text** - drag over text in the chat pane to select it, `ctrl+c` to copy (a wrapped line, e.g. a public key, copies back as one unbroken string).
 - **Adding contacts** - `/addcontact` a known public key directly, `/importcontact` a card someone shared with you, or `/mycard` to get your own shareable card to hand to someone else.
 
 ## Requirements
@@ -147,6 +148,16 @@ MeshCore normally builds your contact list from adverts your node overhears on t
 - **`/addcontact <pubkey-hex> <name>`** - if you already know someone's full 64-character public key (e.g. from a `pubkey` note, a map, another tool), this adds them straight away with no advert or card needed.
 - **`/importcontact meshcore://<hex>`** - imports a contact from a card someone else exported and sent you (over chat, email, a QR code, however).
 - **`/mycard [name]`** - exports a shareable `meshcore://...` card: with no argument, it's your own node's card (hand this to someone else so *they* can `/importcontact` you); with a name, it re-exports one of your existing contacts' cards to pass along.
+
+## Copying text
+
+Drag with the mouse over anything in the chat pane to select it, then press `ctrl+c`; a "Copied N characters" toast confirms it. The copy goes to your local clipboard via the terminal's OSC 52 escape, so it works over SSH in terminals that support it (Windows Terminal, kitty, WezTerm, iTerm2, ...) but not in e.g. PuTTY, MobaXterm or macOS Terminal - there, hold `Shift` while dragging to use the terminal's own selection instead.
+
+Running inside tmux? tmux drops OSC 52 from applications by default - add this to `~/.tmux.conf`:
+
+```
+set -g set-clipboard on
+```
 
 ## Project layout
 

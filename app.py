@@ -23,7 +23,12 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, Checkbox, Header, Footer, Input, Label, ListItem, ListView, RichLog, Static
+from rich.cells import cell_len
 from rich.markup import escape as mkescape
+from rich.segment import Segment
+from rich.text import Text
+from textual.selection import Selection
+from textual.strip import Strip
 
 from mc_client import MeshCoreClient
 from meshcore import EventType
@@ -625,6 +630,97 @@ class RepeaterListScreen(Screen):
 
 # ------------------------------------------------------------------ chat
 
+class SelectableRichLog(RichLog):
+    """RichLog with mouse text selection (drag to select, ctrl+c to copy).
+
+    Textual's own RichLog doesn't support selection: its rendered strips carry
+    no "offset" metadata, so a drag never starts one, and it has no
+    get_selection(). Log does, but it's plain text only - no colors/markup.
+    This adds both to RichLog.
+
+    Wrapped lines: a long message (e.g. a 64-hex-char public key) can wrap
+    across several strips. Each strip records the separator that the wrap
+    swallowed ("" for a hard break mid-word, " " for a word wrap, None for a
+    real line start), so a selection spanning a wrap copies back as the
+    original text rather than with a newline spliced into the middle of it."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._wrap_seps: list[str | None] = []
+
+    def write(self, content, *args, **kwargs):
+        if not self._size_known:
+            # RichLog defers until it knows its size, then calls write() again.
+            return super().write(content, *args, **kwargs)
+        renderable = self._make_renderable(content)
+        if not isinstance(renderable, Text):
+            before = len(self.lines)
+            super().write(content, *args, **kwargs)
+            self._wrap_seps.extend([None] * (len(self.lines) - before))
+            return self
+        # One write per logical line, so every extra strip a write produces
+        # is a wrap of that line, not an explicit newline.
+        for part in renderable.split("\n", allow_blank=True):
+            before = len(self.lines)
+            super().write(part, *args, **kwargs)
+            plain, pos = part.plain, 0
+            for i, strip in enumerate(self.lines[before:]):
+                chunk = strip.text.rstrip()
+                idx = plain.find(chunk, pos) if chunk else -1
+                if i == 0:
+                    self._wrap_seps.append(None)
+                else:
+                    self._wrap_seps.append(plain[pos:idx] if idx >= pos else " ")
+                if idx >= 0:
+                    pos = idx + len(chunk)
+        return self
+
+    def clear(self):
+        self._wrap_seps.clear()
+        return super().clear()
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        out: list[str] = []
+        for y, strip in enumerate(self.lines):
+            span = selection.get_span(y)
+            if span is None:
+                continue
+            text = strip.text.rstrip()
+            start, end = span
+            if end == -1:
+                end = len(text)
+            if out:
+                sep = self._wrap_seps[y] if y < len(self._wrap_seps) else None
+                out.append("\n" if sep is None else sep)
+            out.append(text[start:end])
+        return ("".join(out), "\n") if out else None
+
+    def selection_updated(self, selection: Selection | None) -> None:
+        self.refresh()
+
+    def _render_line(self, y: int, scroll_x: int, width: int) -> Strip:
+        line = super()._render_line(y, scroll_x, width)
+        if y >= len(self.lines):
+            return line
+        selection = self.text_selection
+        if selection is not None and (span := selection.get_span(y)) is not None:
+            text = self.lines[y].text
+            start, end = span
+            if end == -1:
+                end = len(text)
+            # Selection offsets are characters; Strip.crop works in cells.
+            c_start = cell_len(text[:start]) - scroll_x
+            c_end = cell_len(text[:end]) - scroll_x
+            if c_end > 0 and c_start < line.cell_length:
+                c_start, c_end = max(c_start, 0), min(c_end, line.cell_length)
+                sel_style = self.screen.get_component_rich_style("screen--selection")
+                mid = line.crop(c_start, c_end)
+                mid = Strip(Segment.apply_style(list(mid), post_style=sel_style), mid.cell_length)
+                line = Strip.join([line.crop(0, c_start), mid, line.crop(c_end, line.cell_length)])
+        # The "offset" meta is what lets a mouse drag start/extend a selection.
+        return line.apply_offsets(scroll_x, y)
+
+
 class ChatScreen(Screen):
     CSS = """
     ChatScreen {
@@ -720,7 +816,7 @@ class ChatScreen(Screen):
                 yield ListView(id="target_list")
             with Vertical(id="main"):
                 yield Static("Connecting...", id="statusbar")
-                yield RichLog(id="chatlog", wrap=True, markup=True, highlight=False)
+                yield SelectableRichLog(id="chatlog", wrap=True, markup=True, highlight=False)
                 yield Static("", id="corescope_panel")
                 yield Static("", id="reply_banner")
                 yield Input(placeholder="Message, or /help for commands (ctrl+r to reply)", id="input")
@@ -1600,6 +1696,11 @@ class ChatScreen(Screen):
 
 class MeshChatApp(App):
     TITLE = "MeshCoreChatter v2.0.1"
+
+    def copy_to_clipboard(self, text: str) -> None:
+        # Copying is an invisible OSC 52 escape to the terminal - confirm it.
+        super().copy_to_clipboard(text)
+        self.notify(f"Copied {len(text)} characters", timeout=2)
 
     def __init__(self, connection: tuple[str, str] | None = None, corescope_url: str | None = None):
         super().__init__()
